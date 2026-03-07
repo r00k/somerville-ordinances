@@ -47,7 +47,6 @@ class ChatResponse(BaseModel):
     answer: str
     citations: list[CitationResponse]
     confidence: Literal["low", "medium", "high"]
-    refused: bool
     needs_clarification: bool
     clarification_question: Optional[str]
     used_long_context_verification: bool
@@ -182,7 +181,6 @@ def create_app(runtime: AppRuntime | None = None) -> FastAPI:
             answer=result.answer,
             citations=citations,
             confidence=result.confidence,
-            refused=result.refused,
             needs_clarification=result.needs_clarification,
             clarification_question=result.clarification_question,
             used_long_context_verification=result.used_long_context_verification,

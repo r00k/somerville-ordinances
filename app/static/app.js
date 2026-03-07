@@ -181,7 +181,7 @@ async function sendMessage(message) {
     }
 
     const data = await response.json();
-    const meta = `Confidence: ${data.refused ? "needs clarification" : data.confidence}${data.used_long_context_verification ? " · long-context check" : ""}`;
+    const meta = `Confidence: ${data.confidence}${data.used_long_context_verification ? " · long-context check" : ""}`;
 
     appendMessage({
       role: "assistant",

@@ -54,7 +54,6 @@ class ChatResult:
     answer: str
     citations: list[CitationView]
     confidence: Confidence
-    refused: bool
     needs_clarification: bool
     clarification_question: str | None
     used_long_context_verification: bool
@@ -90,7 +89,7 @@ class AnswerEngine:
             model=self.settings.model_name,
         )
 
-        search_query = self._build_search_query(question, history)
+        search_query = self._build_search_query(question, history, request_id=request_id)
         routed_corpora = route_query_corpora(search_query)
         hits, trace = self.index.search(
             search_query,
@@ -227,21 +226,49 @@ class AnswerEngine:
             answer=answer,
             citations=citation_views,
             confidence=final_confidence,
-            refused=False,
             needs_clarification=bool(candidate.clarification_question),
             clarification_question=candidate.clarification_question,
             used_long_context_verification=used_long_context,
             retrieval_trace=trace,
         )
 
-    @staticmethod
-    def _build_search_query(question: str, history: list[dict[str, str]]) -> str:
-        """Combine the current question with conversation history for retrieval."""
+    def _build_search_query(
+        self,
+        question: str,
+        history: list[dict[str, str]],
+        request_id: str | None = None,
+    ) -> str:
+        """Use the LLM with full chat history to produce a standalone search query."""
         if len(history) < 2:
             return question
-        context_parts = [msg["content"] for msg in history[:-1]]
-        context_parts.append(question)
-        return " ".join(context_parts)
+
+        history_lines = []
+        for msg in history[:-1]:
+            role = "User" if msg["role"] == "user" else "Assistant"
+            history_lines.append(f"{role}: {msg['content']}")
+
+        resp = self.provider.generate(
+            system_prompt=(
+                "You rewrite follow-up questions into standalone search queries. "
+                "Resolve all pronouns and references using the conversation history. "
+                "Return ONLY the rewritten question, nothing else."
+            ),
+            user_prompt=(
+                f"Conversation so far:\n" + "\n".join(history_lines) + "\n\n"
+                f"Follow-up question: {question}\n\n"
+                "Rewritten standalone question:"
+            ),
+            temperature=0.0,
+            max_tokens=150,
+        )
+        rewritten = resp.content.strip().strip('"')
+        log_event(
+            "qa.query_rewritten",
+            request_id=request_id,
+            original_question=question,
+            rewritten_question=rewritten,
+        )
+        return rewritten or question
 
     def _generate_validated_answer(
         self,
@@ -547,7 +574,6 @@ class AnswerEngine:
             answer=answer,
             citations=[],
             confidence=confidence,
-            refused=True,
             needs_clarification=True,
             clarification_question=clarification_question,
             used_long_context_verification=used_long_context,
