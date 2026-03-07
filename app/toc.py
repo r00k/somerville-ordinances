@@ -96,8 +96,9 @@ def parse_toc(markdown_text: str, corpus: CorpusName) -> tuple[list[TocChapter],
             m = HEADING_RE.match(line.strip())
             if m:
                 sub_level = len(m.group(1))
-                if sub_level > level:
-                    subheadings.append(m.group(2).strip())
+                sub_text = m.group(2).strip()
+                if sub_level > level and not sub_text.rstrip(".").endswith("Reserved"):
+                    subheadings.append(sub_text)
 
         chapters.append(
             TocChapter(

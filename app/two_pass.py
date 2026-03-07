@@ -67,10 +67,12 @@ class TwoPassEngine:
         settings: AppSettings,
         toc: CorpusToc,
         provider: ModelProvider,
+        pass1_provider: ModelProvider | None = None,
     ):
         self.settings = settings
         self.toc = toc
         self.provider = provider
+        self.pass1_provider = pass1_provider or provider
 
     def ask(
         self,
@@ -154,7 +156,7 @@ class TwoPassEngine:
             user_prompt_length=len(user_prompt),
         )
 
-        raw = self.provider.generate(
+        raw = self.pass1_provider.generate(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             temperature=0.0,

@@ -59,7 +59,25 @@ def build_runtime(settings: AppSettings | None = None) -> AppRuntime:
     toc = build_corpus_toc(non_zoning_text, zoning_text)
 
     provider = build_provider(settings)
-    engine = TwoPassEngine(settings=settings, toc=toc, provider=provider)
+    if settings.pass1_model_name != settings.model_name:
+        pass1_settings = AppSettings(
+            non_zoning_markdown=settings.non_zoning_markdown,
+            zoning_markdown=settings.zoning_markdown,
+            non_zoning_readable_html=settings.non_zoning_readable_html,
+            zoning_readable_html=settings.zoning_readable_html,
+            model_provider=settings.model_provider,
+            model_name=settings.pass1_model_name,
+            pass1_model_name=settings.pass1_model_name,
+            model_api_key=settings.model_api_key,
+            model_base_url=settings.model_base_url,
+            request_timeout_seconds=settings.request_timeout_seconds,
+            max_history_messages=settings.max_history_messages,
+            observability_log_level=settings.observability_log_level,
+        )
+        pass1_provider = build_provider(pass1_settings)
+    else:
+        pass1_provider = None
+    engine = TwoPassEngine(settings=settings, toc=toc, provider=provider, pass1_provider=pass1_provider)
     return AppRuntime(
         settings=settings,
         toc=toc,

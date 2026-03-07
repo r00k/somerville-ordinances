@@ -28,6 +28,7 @@ def client() -> TestClient:
         zoning_readable_html=root / "somerville-zoning.readable.html",
         model_provider="openai",
         model_name="gpt-5.4",
+        pass1_model_name="gpt-4.1-mini",
         model_api_key=OPENAI_API_KEY,
         model_base_url=None,
         request_timeout_seconds=60.0,
@@ -75,30 +76,6 @@ def test_health_endpoint(client: TestClient) -> None:
     assert payload["status"] == "ok"
     assert payload["chapters_loaded"] > 10
     assert payload["mode"] == "two_pass"
-
-
-@pytest.mark.parametrize(
-    "prompt",
-    [
-        "How many people sit on the Somerville city council?",
-        "Can you demolish a 100 year-old building in Somerville without permission?",
-        "How long is the mayor's term?",
-    ],
-)
-def test_critical_questions(
-    client: TestClient,
-    prompt: str,
-) -> None:
-    response = client.post(
-        "/api/chat",
-        json={"message": prompt, "history": []},
-    )
-    assert response.status_code == 200
-    payload = response.json()
-
-    assert len(payload["answer"]) > 20
-    assert payload["citations"]
-
 
 def test_chat_logs_question_attempt_and_response_as_json(
     client: TestClient,

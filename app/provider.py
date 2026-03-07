@@ -52,15 +52,18 @@ class OpenAIProvider(ModelProvider):
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": temperature,
+            "max_tokens": max_tokens,
         }
 
-        # Compatibility across OpenAI model families.
-        kwargs["max_tokens"] = max_tokens
+        # Compatibility across OpenAI model families: some models require
+        # max_completion_tokens instead of max_tokens, or don't support
+        # custom temperature values.
         try:
             completion = self._client.chat.completions.create(**kwargs)
         except Exception:
             kwargs.pop("max_tokens", None)
             kwargs["max_completion_tokens"] = max_tokens
+            kwargs.pop("temperature", None)
             completion = self._client.chat.completions.create(**kwargs)
 
         content = completion.choices[0].message.content or ""
