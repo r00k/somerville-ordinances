@@ -89,15 +89,36 @@ function appendMessage({ role, content, meta = "", citations = [] }) {
       label.className = "citation-label";
       label.textContent = "Citation";
 
-      const title = document.createElement("div");
+      const primaryUrl = citation.url || citation.local_url || citation.official_url || "";
+      const title = document.createElement(primaryUrl ? "a" : "div");
       title.className = "citation-heading";
       title.textContent = citation.heading;
+      if (primaryUrl) {
+        title.href = primaryUrl;
+        title.target = "_blank";
+        title.rel = "noopener noreferrer";
+      }
 
       const quote = document.createElement("span");
       quote.className = "quote";
       quote.textContent = `\u201c${citation.quote}\u201d`;
 
+      const links = document.createElement("div");
+      links.className = "citation-links";
+
+      if (citation.official_url && citation.official_url !== primaryUrl) {
+        const official = document.createElement("a");
+        official.href = citation.official_url;
+        official.target = "_blank";
+        official.rel = "noopener noreferrer";
+        official.textContent = "Official source";
+        links.appendChild(official);
+      }
+
       wrap.append(label, title, quote);
+      if (links.childNodes.length) {
+        wrap.appendChild(links);
+      }
       citationsEl.appendChild(wrap);
     }
   }
@@ -107,6 +128,10 @@ function appendMessage({ role, content, meta = "", citations = [] }) {
 }
 
 async function loadHealth() {
+  if (!healthEl) {
+    return;
+  }
+
   try {
     const response = await fetch("/health");
     if (!response.ok) {

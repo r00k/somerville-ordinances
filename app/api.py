@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .citation_links import build_citation_links
 from .config import AppSettings, load_settings
 from .corpus import CorpusBundle, load_corpus_sections
 from .observability import configure_observability, log_event, serialize_exception
@@ -37,6 +38,9 @@ class CitationResponse(BaseModel):
     quote: str
     reason: str
     score: float
+    url: Optional[str] = None
+    local_url: Optional[str] = None
+    official_url: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
@@ -84,6 +88,20 @@ def create_app(runtime: AppRuntime | None = None) -> FastAPI:
     @app.get("/")
     async def read_root() -> FileResponse:
         return FileResponse(static_dir / "index.html")
+
+    @app.get("/documents/non-zoning")
+    async def read_non_zoning_document() -> FileResponse:
+        document_path = active_runtime.settings.non_zoning_readable_html
+        if not document_path.exists():
+            raise HTTPException(status_code=404, detail="Non-zoning readable HTML file not found.")
+        return FileResponse(document_path)
+
+    @app.get("/documents/zoning")
+    async def read_zoning_document() -> FileResponse:
+        document_path = active_runtime.settings.zoning_readable_html
+        if not document_path.exists():
+            raise HTTPException(status_code=404, detail="Zoning readable HTML file not found.")
+        return FileResponse(document_path)
 
     @app.get("/health")
     async def health() -> dict[str, object]:
@@ -140,18 +158,25 @@ def create_app(runtime: AppRuntime | None = None) -> FastAPI:
             )
             raise HTTPException(status_code=500, detail=f"QA pipeline failed: {exc}") from exc
 
-        citations = [
-            CitationResponse(
-                corpus=item.corpus,
-                secid=item.secid,
-                heading=item.heading,
-                source_file=item.source_file,
-                quote=item.quote,
-                reason=item.reason,
-                score=item.score,
+        citations: list[CitationResponse] = []
+        for item in result.citations:
+            section = active_runtime.corpus_bundle.by_key.get((item.corpus, item.secid))
+            links = build_citation_links(section, active_runtime.settings) if section else None
+
+            citations.append(
+                CitationResponse(
+                    corpus=item.corpus,
+                    secid=item.secid,
+                    heading=item.heading,
+                    source_file=item.source_file,
+                    quote=item.quote,
+                    reason=item.reason,
+                    score=item.score,
+                    url=links.url if links else None,
+                    local_url=links.local_url if links else None,
+                    official_url=links.official_url if links else None,
+                )
             )
-            for item in result.citations
-        ]
 
         response = ChatResponse(
             answer=result.answer,

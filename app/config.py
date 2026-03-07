@@ -24,6 +24,8 @@ def _env_bool(name: str, default: bool) -> bool:
 class AppSettings:
     non_zoning_markdown: Path
     zoning_markdown: Path
+    non_zoning_readable_html: Path
+    zoning_readable_html: Path
     model_provider: str
     model_name: str
     model_api_key: str | None
@@ -58,6 +60,12 @@ def load_settings() -> AppSettings:
     return AppSettings(
         non_zoning_markdown=Path(os.getenv("NON_ZONING_MARKDOWN", APP_ROOT / "somerville-law-non-zoning.md")),
         zoning_markdown=Path(os.getenv("ZONING_MARKDOWN", APP_ROOT / "somerville-zoning.md")),
+        non_zoning_readable_html=Path(
+            os.getenv("NON_ZONING_READABLE_HTML", APP_ROOT / "somerville-law-non-zoning.readable.html")
+        ),
+        zoning_readable_html=Path(
+            os.getenv("ZONING_READABLE_HTML", APP_ROOT / "somerville-zoning.readable.html")
+        ),
         model_provider=model_provider,
         model_name=model_name,
         model_api_key=model_api_key,

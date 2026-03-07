@@ -220,8 +220,19 @@ body {
 }
 
 .citation-heading {
+  display: inline-block;
   font-weight: 600;
   margin-bottom: 0.25rem;
+}
+
+a.citation-heading {
+  color: #0d5672;
+  text-decoration: none;
+}
+
+a.citation-heading:hover,
+a.citation-heading:focus-visible {
+  text-decoration: underline;
 }
 
 .citation .quote {
@@ -229,6 +240,21 @@ body {
   margin-top: 0.3rem;
   color: #35434a;
   font-style: italic;
+}
+
+.citation-links {
+  margin-top: 0.45rem;
+  font-size: 0.8rem;
+}
+
+.citation-links a {
+  color: #245e7a;
+  text-decoration: none;
+}
+
+.citation-links a:hover,
+.citation-links a:focus-visible {
+  text-decoration: underline;
 }
 
 .composer {

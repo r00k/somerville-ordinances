@@ -25,6 +25,8 @@ def client() -> TestClient:
     settings = AppSettings(
         non_zoning_markdown=root / "somerville-law-non-zoning.md",
         zoning_markdown=root / "somerville-zoning.md",
+        non_zoning_readable_html=root / "somerville-law-non-zoning.readable.html",
+        zoning_readable_html=root / "somerville-zoning.readable.html",
         model_provider="openai",
         model_name="gpt-5.4",
         model_api_key=OPENAI_API_KEY,
