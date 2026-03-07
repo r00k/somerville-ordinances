@@ -103,8 +103,8 @@ class SectionIndex:
 
     @staticmethod
     def tokenize(text: str) -> list[str]:
-        tokens = [match.group(0).lower() for match in TOKEN_RE.finditer(text)]
-        return [token for token in tokens if token not in STOP_WORDS]
+        tokens = [normalize_token(match.group(0)) for match in TOKEN_RE.finditer(text)]
+        return [token for token in tokens if token and token not in STOP_WORDS]
 
     def _idf(self, term: str) -> float:
         n_docs = len(self.sections)
@@ -298,8 +298,8 @@ def is_broad_query(query: str) -> bool:
 
 
 def build_query_phrases(query: str) -> set[str]:
-    normalized = re.sub(r"[^a-z0-9\s-]", " ", query.lower())
-    words = [word for word in normalized.split() if word]
+    words = [normalize_token(match.group(0)) for match in TOKEN_RE.finditer(query.lower())]
+    words = [word for word in words if word and len(word) >= 2]
     phrases: set[str] = set()
 
     for idx in range(len(words) - 1):
@@ -321,6 +321,15 @@ def build_query_phrases(query: str) -> set[str]:
         phrases.add("demolition")
 
     return phrases
+
+
+def normalize_token(token: str) -> str:
+    token = token.lower().strip("'")
+    if token.endswith("'s"):
+        token = token[:-2]
+    if token.endswith("s'"):
+        token = token[:-1]
+    return token
 
 
 def expand_query_tokens(query: str, base_tokens: list[str]) -> list[str]:

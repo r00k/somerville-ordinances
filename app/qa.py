@@ -141,8 +141,6 @@ class AnswerEngine:
 
         citation_views = self._to_citation_views(candidate.citations, hits)
         answer = candidate.answer_markdown.strip()
-        if DISCLAIMER.lower() not in answer.lower():
-            answer = f"{answer}\n\n{DISCLAIMER}"
 
         return ChatResult(
             answer=answer,
@@ -199,6 +197,7 @@ class AnswerEngine:
             "Correctness is the top priority. Use ONLY the retrieved ordinance sections. "
             "If evidence is incomplete, set insufficient_context=true and ask a clarification question. "
             "Do not invent section IDs, percentages, or permissions. "
+            "Do NOT include any disclaimers, legal warnings, or 'informational only' notices in your answer. "
             "Return strictly valid JSON matching the requested schema."
         )
 
@@ -311,8 +310,7 @@ class AnswerEngine:
     ) -> ChatResult:
         answer = (
             "I can’t answer that reliably from the retrieved Somerville law text without risking an incorrect statement. "
-            "Please narrow the question so I can cite exact sections.\n\n"
-            f"{DISCLAIMER}"
+            "Please narrow the question so I can cite exact sections."
         )
         return ChatResult(
             answer=answer,
@@ -455,6 +453,7 @@ def validate_citations(
         valid.append(citation)
 
     return errors, valid
+
 
 
 def normalize_for_match(text: str) -> str:

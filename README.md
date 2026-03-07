@@ -147,21 +147,51 @@ This is designed to reduce the chance of confident but ungrounded legal guidance
 
 ## App Verification Checks
 
-Automated script for critical questions:
+Automated script for critical and extended sanity checks:
 
 ```bash
-# Start the app in one terminal
+# Start the app in one terminal (mock mode for offline smoke testing)
 MODEL_PROVIDER=mock MODEL_NAME=mock-local python3 -m uvicorn app.api:app --host 127.0.0.1 --port 8000
 
-# Run checks in another terminal
-python3 scripts/verify_app_answers.py --base-url http://127.0.0.1:8000
+# Run acceptance-critical checks (default suite is critical)
+python3 scripts/verify_app_answers.py --base-url http://127.0.0.1:8000 --suite critical
+
+# Run extended sanity checks with a real model provider (OpenAI/Anthropic)
+MODEL_PROVIDER=anthropic MODEL_NAME=claude-opus-4-6 ANTHROPIC_API_KEY=... \
+python3 -m uvicorn app.api:app --host 127.0.0.1 --port 8000
+
+# Then run all checks (critical + sanity)
+python3 scripts/verify_app_answers.py --base-url http://127.0.0.1:8000 --suite all
+
+# Or run only the 10-question sanity suite
+python3 scripts/verify_app_answers.py --base-url http://127.0.0.1:8000 --suite sanity
 ```
 
-Current checks ask the app:
+Notes:
 
-- how many people sit on city council (expected: `11`),
-- inclusionary-zoning affordable requirement for 2 units (`0`) and 20 units (`4`),
-- whether a 100-year-old building can be demolished without permission (expected: `no`).
+- By default, each question runs independently (no cross-question chat history).
+- Add `--carry-history` to test multi-turn behavior.
+- Non-refused answers must include at least one citation to pass.
+- The `sanity` and `all` suites are intended for real-provider end-to-end validation, not mock-only runs.
+
+Critical checks verify:
+
+- city council size (`11`),
+- inclusionary-zoning 2-unit (`0`) and 20-unit (`4`) affordability requirement,
+- demolition without permission (`no`).
+
+Sanity suite (10 additional doc-grounded checks) verifies expected answers for:
+
+- mayor term of office (`2 years`),
+- ward councilor count (`7`),
+- votes required to override mayoral veto (`8`),
+- special city council meeting notice timing (`3 business days`),
+- group petition signature threshold (`50 voters`),
+- zoning text vs. graphics precedence (text controls),
+- demolition definition threshold (`50%` exterior walls and roof),
+- Neighborhood Residence address-sign max height (`12 inches`),
+- parking unbundling requirement (parking must be unbundled),
+- default classification for unmapped land (Civic District).
 
 ## Zoning Extract (Text + Image Placeholders)
 

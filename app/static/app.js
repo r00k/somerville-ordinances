@@ -8,12 +8,60 @@ const healthEl = document.getElementById("health");
 /** @type {{role: 'user'|'assistant', content: string}[]} */
 const history = [];
 
+/** Minimal markdown renderer for bold, italic, and simple tables. */
+function renderMarkdown(text) {
+  let html = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  // Tables: detect lines with pipes
+  const lines = html.split("\n");
+  const out = [];
+  let inTable = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (line.startsWith("|") && line.endsWith("|")) {
+      if (/^\|[\s\-:|]+\|$/.test(line)) continue;
+      const cells = line.slice(1, -1).split("|").map((c) => c.trim());
+      if (!inTable) {
+        out.push("<table>");
+        inTable = true;
+        out.push("<tr>" + cells.map((c) => `<th>${c}</th>`).join("") + "</tr>");
+      } else {
+        out.push("<tr>" + cells.map((c) => `<td>${c}</td>`).join("") + "</tr>");
+      }
+    } else {
+      if (inTable) {
+        out.push("</table>");
+        inTable = false;
+      }
+      out.push(line);
+    }
+  }
+  if (inTable) out.push("</table>");
+  html = out.join("\n");
+
+  // Bold and italic
+  html = html.replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>");
+  html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
+
+  // Paragraphs from double newlines
+  html = html.replace(/\n{2,}/g, "</p><p>");
+  html = "<p>" + html + "</p>";
+  html = html.replace(/<p>\s*<table>/g, "<table>");
+  html = html.replace(/<\/table>\s*<\/p>/g, "</table>");
+
+  return html;
+}
+
 function appendMessage({ role, content, meta = "", citations = [] }) {
   const node = tpl.content.firstElementChild.cloneNode(true);
   node.classList.add(role);
   node.querySelector(".role").textContent = role === "assistant" ? "Assistant" : "You";
   node.querySelector(".meta").textContent = meta;
-  node.querySelector(".content").textContent = content;
+  node.querySelector(".content").innerHTML = renderMarkdown(content);
 
   const citationsEl = node.querySelector(".citations");
   if (citations.length) {
@@ -21,20 +69,19 @@ function appendMessage({ role, content, meta = "", citations = [] }) {
       const wrap = document.createElement("article");
       wrap.className = "citation";
 
-      const title = document.createElement("div");
-      const strong = document.createElement("strong");
-      strong.textContent = `${citation.corpus}:${citation.secid}`;
-      title.appendChild(strong);
-      title.append(` ${citation.heading}`);
+      const label = document.createElement("div");
+      label.className = "citation-label";
+      label.textContent = "Citation";
 
-      const reason = document.createElement("div");
-      reason.textContent = citation.reason || "Supporting source";
+      const title = document.createElement("div");
+      title.className = "citation-heading";
+      title.textContent = citation.heading;
 
       const quote = document.createElement("span");
       quote.className = "quote";
-      quote.textContent = `“${citation.quote}”`;
+      quote.textContent = `\u201c${citation.quote}\u201d`;
 
-      wrap.append(title, reason, quote);
+      wrap.append(label, title, quote);
       citationsEl.appendChild(wrap);
     }
   }
@@ -85,8 +132,7 @@ async function sendMessage(message) {
     }
 
     const data = await response.json();
-    const meta = `${data.refused ? "needs clarification" : data.confidence} · corpora: ${data.requested_corpora.join(", "
-    )}${data.used_long_context_verification ? " · long-context check" : ""}`;
+    const meta = `Confidence: ${data.refused ? "needs clarification" : data.confidence}${data.used_long_context_verification ? " · long-context check" : ""}`;
 
     appendMessage({
       role: "assistant",
@@ -128,7 +174,7 @@ promptEl.addEventListener("keydown", (event) => {
 appendMessage({
   role: "assistant",
   content:
-    "Ask a legal question and I will answer only from cited Somerville ordinance sections. If I can’t ground it, I’ll say so.",
+    "Ask a legal question and I will answer only from cited Somerville ordinance sections. If I can't ground it, I'll say so.",
   meta: "ready",
 });
 

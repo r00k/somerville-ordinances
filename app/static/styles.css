@@ -68,6 +68,15 @@ body {
   margin: 0.45rem 0;
 }
 
+.disclaimer {
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-style: italic;
+  margin: 0.75rem 0 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--rule);
+}
+
 .health {
   margin-top: 1rem;
   border-top: 1px solid var(--rule);
@@ -134,8 +143,33 @@ body {
 }
 
 .message .content {
-  white-space: pre-wrap;
   line-height: 1.5;
+}
+
+.message .content p {
+  margin: 0 0 0.5em;
+}
+
+.message .content p:last-child {
+  margin-bottom: 0;
+}
+
+.message .content table {
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 0.92em;
+}
+
+.message .content th,
+.message .content td {
+  border: 1px solid var(--rule);
+  padding: 0.35em 0.6em;
+  text-align: left;
+}
+
+.message .content th {
+  background: rgba(0, 0, 0, 0.04);
+  font-weight: 600;
 }
 
 .citations {
@@ -152,15 +186,25 @@ body {
   font-size: 0.88rem;
 }
 
-.citation strong {
-  display: inline-block;
-  margin-right: 0.35rem;
+.citation-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  margin-bottom: 0.2rem;
+}
+
+.citation-heading {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
 }
 
 .citation .quote {
   display: block;
   margin-top: 0.3rem;
   color: #35434a;
+  font-style: italic;
 }
 
 .composer {
