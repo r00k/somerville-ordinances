@@ -1,4 +1,4 @@
-.DS_Store
+DS_Store
 Thumbs.db
 
 __pycache__/
@@ -10,3 +10,6 @@ venv/
 
 .idea/
 .vscode/
+
+
+server.log
