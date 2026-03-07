@@ -11,6 +11,18 @@ HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 
 
 @dataclass(frozen=True)
+class TocSearchHit:
+    """A search result from the table of contents."""
+
+    chapter_index: int
+    corpus: CorpusName
+    heading: str
+    heading_path: tuple[str, ...]
+    subheadings: tuple[str, ...]
+    score: int
+
+
+@dataclass(frozen=True)
 class TocChapter:
     """A chapter/article-level entry in the table of contents."""
 
@@ -33,6 +45,60 @@ class CorpusToc:
     def chapter_text(self, chapter: TocChapter) -> str:
         lines = self._lines_by_corpus[chapter.corpus]
         return "".join(lines[chapter.start_line : chapter.end_line])
+
+    def chapter_at(self, chapter_index: int) -> TocChapter:
+        """Return the chapter at the given index, raising IndexError if out of range."""
+        if chapter_index < 0 or chapter_index >= len(self.chapters):
+            raise IndexError(chapter_index)
+        return self.chapters[chapter_index]
+
+    def search(self, query: str, limit: int = 8) -> list[TocSearchHit]:
+        """Search the TOC by keyword. An empty query returns the first `limit` chapters."""
+        query = query.strip().lower()
+        if not query:
+            return [
+                TocSearchHit(
+                    chapter_index=i,
+                    corpus=ch.corpus,
+                    heading=ch.heading,
+                    heading_path=ch.heading_path,
+                    subheadings=ch.subheadings,
+                    score=0,
+                )
+                for i, ch in enumerate(self.chapters[:limit])
+            ]
+
+        terms = [t for t in re.split(r"\W+", query) if t]
+        hits: list[TocSearchHit] = []
+
+        for i, ch in enumerate(self.chapters):
+            heading = ch.heading.lower()
+            path = " ".join(ch.heading_path).lower()
+            subs = " ".join(ch.subheadings).lower()
+
+            score = 0
+            for term in terms:
+                if term in heading:
+                    score += 10
+                if term in path:
+                    score += 6
+                if term in subs:
+                    score += 3
+
+            if score > 0:
+                hits.append(
+                    TocSearchHit(
+                        chapter_index=i,
+                        corpus=ch.corpus,
+                        heading=ch.heading,
+                        heading_path=ch.heading_path,
+                        subheadings=ch.subheadings,
+                        score=score,
+                    )
+                )
+
+        hits.sort(key=lambda h: (-h.score, h.chapter_index))
+        return hits[:limit]
 
     def render_toc(self) -> str:
         """Render a compact TOC string suitable for an LLM to pick from."""

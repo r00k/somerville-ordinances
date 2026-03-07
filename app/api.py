@@ -6,16 +6,16 @@ from pathlib import Path
 from typing import Literal, Optional
 from uuid import uuid4
 
+from anthropic import AsyncAnthropic
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .agent import SomervilleLawAgent
 from .config import AppSettings, load_settings
 from .observability import configure_observability, log_event, serialize_exception
-from .provider import ModelProvider, build_provider
 from .toc import CorpusToc, build_corpus_toc
-from .two_pass import TwoPassEngine
 
 
 class ChatMessage(BaseModel):
@@ -47,8 +47,7 @@ class ChatResponse(BaseModel):
 class AppRuntime:
     settings: AppSettings
     toc: CorpusToc
-    provider: ModelProvider
-    engine: TwoPassEngine
+    agent: SomervilleLawAgent
 
 
 def build_runtime(settings: AppSettings | None = None) -> AppRuntime:
@@ -58,32 +57,16 @@ def build_runtime(settings: AppSettings | None = None) -> AppRuntime:
     zoning_text = settings.zoning_markdown.read_text(encoding="utf-8")
     toc = build_corpus_toc(non_zoning_text, zoning_text)
 
-    provider = build_provider(settings)
-    if settings.pass1_model_name != settings.model_name:
-        pass1_settings = AppSettings(
-            non_zoning_markdown=settings.non_zoning_markdown,
-            zoning_markdown=settings.zoning_markdown,
-            non_zoning_readable_html=settings.non_zoning_readable_html,
-            zoning_readable_html=settings.zoning_readable_html,
-            model_provider=settings.model_provider,
-            model_name=settings.pass1_model_name,
-            pass1_model_name=settings.pass1_model_name,
-            model_api_key=settings.model_api_key,
-            model_base_url=settings.model_base_url,
-            request_timeout_seconds=settings.request_timeout_seconds,
-            max_history_messages=settings.max_history_messages,
-            observability_log_level=settings.observability_log_level,
-        )
-        pass1_provider = build_provider(pass1_settings)
-    else:
-        pass1_provider = None
-    engine = TwoPassEngine(settings=settings, toc=toc, provider=provider, pass1_provider=pass1_provider)
-    return AppRuntime(
-        settings=settings,
-        toc=toc,
-        provider=provider,
-        engine=engine,
+    if not settings.anthropic_api_key:
+        raise RuntimeError("Missing ANTHROPIC_API_KEY (or MODEL_API_KEY).")
+
+    client = AsyncAnthropic(
+        api_key=settings.anthropic_api_key,
+        timeout=settings.request_timeout_seconds,
     )
+    agent = SomervilleLawAgent(settings=settings, toc=toc, client=client)
+
+    return AppRuntime(settings=settings, toc=toc, agent=agent)
 
 
 @lru_cache(maxsize=1)
@@ -121,10 +104,10 @@ def create_app(runtime: AppRuntime | None = None) -> FastAPI:
     async def health() -> dict[str, object]:
         return {
             "status": "ok",
-            "provider": active_runtime.provider.name,
+            "provider": "anthropic",
             "model": active_runtime.settings.model_name,
             "chapters_loaded": len(active_runtime.toc.chapters),
-            "mode": "two_pass",
+            "mode": "agent",
         }
 
     @app.post("/api/chat", response_model=ChatResponse)
@@ -152,13 +135,14 @@ def create_app(runtime: AppRuntime | None = None) -> FastAPI:
             question=message,
             history=history,
             history_count=len(history),
-            provider=active_runtime.provider.name,
             model=active_runtime.settings.model_name,
         )
 
         try:
-            result = active_runtime.engine.ask(question=message, history=history, request_id=request_id)
-        except Exception as exc:  # pragma: no cover - surfaced in API response for manual testing
+            result = await active_runtime.agent.ask(
+                question=message, history=history, request_id=request_id
+            )
+        except Exception as exc:
             log_event(
                 "chat.request_failed",
                 level="error",
@@ -167,9 +151,9 @@ def create_app(runtime: AppRuntime | None = None) -> FastAPI:
                 history=history,
                 response_status=500,
                 error=serialize_exception(exc),
-                response_body={"detail": f"QA pipeline failed: {exc}"},
+                response_body={"detail": f"Agent pipeline failed: {exc}"},
             )
-            raise HTTPException(status_code=500, detail=f"QA pipeline failed: {exc}") from exc
+            raise HTTPException(status_code=500, detail=f"Agent pipeline failed: {exc}") from exc
 
         citations = [
             CitationResponse(

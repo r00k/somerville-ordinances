@@ -10,8 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-ENV MODEL_PROVIDER=mock \
-    MODEL_NAME=mock-local
+ENV MODEL_NAME=claude-sonnet-4-6
 
 EXPOSE 8000
 

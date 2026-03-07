@@ -8,31 +8,30 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from app.agent import SomervilleLawAgent
 from app.api import build_runtime, create_app
 from app.config import AppSettings
 from app.observability import LOGGER_NAME
-from app.two_pass import TwoPassEngine
 
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") or os.environ.get("MODEL_API_KEY", "")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("MODEL_API_KEY", "")
 
 
 @pytest.fixture(scope="session")
 def client() -> TestClient:
-    if not OPENAI_API_KEY:
-        pytest.skip("OPENAI_API_KEY not set")
+    if not ANTHROPIC_API_KEY:
+        pytest.skip("ANTHROPIC_API_KEY not set")
     root = Path(__file__).resolve().parent.parent
     settings = AppSettings(
         non_zoning_markdown=root / "somerville-law-non-zoning.md",
         zoning_markdown=root / "somerville-zoning.md",
         non_zoning_readable_html=root / "somerville-law-non-zoning.readable.html",
         zoning_readable_html=root / "somerville-zoning.readable.html",
-        model_provider="openai",
-        model_name="gpt-5.4",
-        pass1_model_name="gpt-4.1-mini",
-        model_api_key=OPENAI_API_KEY,
-        model_base_url=None,
+        model_name="claude-sonnet-4-6",
+        anthropic_api_key=ANTHROPIC_API_KEY,
         request_timeout_seconds=60.0,
         max_history_messages=8,
+        max_output_tokens=4096,
+        toc_search_limit=8,
         observability_log_level="INFO",
     )
     runtime = build_runtime(settings)
@@ -75,7 +74,7 @@ def test_health_endpoint(client: TestClient) -> None:
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["chapters_loaded"] > 10
-    assert payload["mode"] == "two_pass"
+    assert payload["mode"] == "agent"
 
 def test_chat_logs_question_attempt_and_response_as_json(
     client: TestClient,
@@ -105,11 +104,10 @@ def test_chat_pipeline_error_logs_structured_json(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def boom(self: TwoPassEngine, question: str, history: list[dict[str, str]], request_id: str | None = None):
-        del self, question, history, request_id
+    async def boom(self, *, question, history, request_id=None):
         raise RuntimeError("forced failure")
 
-    monkeypatch.setattr(TwoPassEngine, "ask", boom)
+    monkeypatch.setattr(SomervilleLawAgent, "ask", boom)
     logger, handler, messages = _capture_observability_messages()
     try:
         response = client.post("/api/chat", json={"message": "trigger pipeline failure", "history": []})
