@@ -36,6 +36,7 @@ class AppSettings:
     enable_long_context_verification: bool
     long_context_top_k: int
     long_context_trigger_min_confidence: str
+    observability_log_level: str
 
 
 def load_settings() -> AppSettings:
@@ -69,4 +70,5 @@ def load_settings() -> AppSettings:
         enable_long_context_verification=_env_bool("ENABLE_LONG_CONTEXT_VERIFICATION", False),
         long_context_top_k=max(6, int(os.getenv("LONG_CONTEXT_TOP_K", "24"))),
         long_context_trigger_min_confidence=os.getenv("LONG_CONTEXT_TRIGGER_MIN_CONFIDENCE", "medium").strip().lower(),
+        observability_log_level=os.getenv("OBSERVABILITY_LOG_LEVEL", "INFO").strip().upper(),
     )

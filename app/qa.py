@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from .config import AppSettings
 from .corpus import CorpusBundle
+from .observability import log_event, serialize_exception
 from .provider import ModelProvider
 from .retrieval import (
     RetrievalTrace,
@@ -75,7 +76,21 @@ class AnswerEngine:
         self.index = index
         self.provider = provider
 
-    def ask(self, question: str, history: list[dict[str, str]]) -> ChatResult:
+    def ask(
+        self,
+        question: str,
+        history: list[dict[str, str]],
+        request_id: str | None = None,
+    ) -> ChatResult:
+        log_event(
+            "qa.assistance_attempt_started",
+            request_id=request_id,
+            question=question,
+            history=history,
+            provider=self.provider.name,
+            model=self.settings.model_name,
+        )
+
         routed_corpora = route_query_corpora(question)
         hits, trace = self.index.search(
             question,
@@ -85,25 +100,65 @@ class AnswerEngine:
             min_score=self.settings.retrieval_min_score,
         )
 
+        log_event(
+            "qa.retrieval_completed",
+            request_id=request_id,
+            question=question,
+            requested_corpora=sorted(routed_corpora),
+            retrieval_trace={
+                "query_tokens": trace.query_tokens,
+                "top_score": trace.top_score,
+                "second_score": trace.second_score,
+            },
+            retrieved_sections=[
+                {
+                    "corpus": hit.section.corpus,
+                    "secid": hit.section.secid,
+                    "heading": hit.section.heading,
+                    "score": hit.score,
+                }
+                for hit in hits
+            ],
+        )
+
         if not hits:
             return self._refusal_result(
                 trace=trace,
                 clarification_question="Could you include more detail (topic, article, or section) so I can retrieve supporting law text?",
+                request_id=request_id,
+                question=question,
+                refusal_reason="no_retrieval_hits",
             )
 
         retrieval_level = retrieval_confidence(hits, trace)
         try:
-            candidate = self._generate_validated_answer(question, history, hits)
-        except Exception:
+            candidate = self._generate_validated_answer(
+                question,
+                history,
+                hits,
+                request_id=request_id,
+            )
+        except Exception as exc:
             return self._refusal_result(
                 trace=trace,
                 clarification_question=(
                     "The model response could not be validated. Please retry or narrow the question for a more targeted lookup."
                 ),
+                request_id=request_id,
+                question=question,
+                refusal_reason="model_generation_failed",
+                refusal_error=serialize_exception(exc),
             )
         used_long_context = False
 
         if self._should_run_long_context_verification(question, retrieval_level):
+            log_event(
+                "qa.long_context_verification_started",
+                request_id=request_id,
+                question=question,
+                retrieval_confidence=retrieval_level,
+                long_context_top_k=self.settings.long_context_top_k,
+            )
             expanded_hits, _expanded_trace = self.index.search(
                 question,
                 allowed_corpora=routed_corpora,
@@ -113,12 +168,31 @@ class AnswerEngine:
             )
             if expanded_hits:
                 try:
-                    alt_candidate = self._generate_validated_answer(question, history, expanded_hits)
-                except Exception:
+                    alt_candidate = self._generate_validated_answer(
+                        question,
+                        history,
+                        expanded_hits,
+                        request_id=request_id,
+                    )
+                except Exception as exc:
+                    log_event(
+                        "qa.long_context_verification_failed",
+                        level="warning",
+                        request_id=request_id,
+                        question=question,
+                        error=serialize_exception(exc),
+                    )
                     alt_candidate = None
                 if alt_candidate is not None:
                     candidate = self._choose_candidate(candidate, alt_candidate)
                     used_long_context = True
+                    log_event(
+                        "qa.long_context_verification_completed",
+                        request_id=request_id,
+                        question=question,
+                        selected_confidence=candidate.confidence,
+                        selected_citation_count=len(candidate.citations),
+                    )
 
         final_confidence = compute_final_confidence(
             question=question,
@@ -137,10 +211,31 @@ class AnswerEngine:
                 ),
                 confidence=final_confidence,
                 used_long_context=used_long_context,
+                request_id=request_id,
+                question=question,
+                refusal_reason="insufficient_grounding",
             )
 
         citation_views = self._to_citation_views(candidate.citations, hits)
         answer = candidate.answer_markdown.strip()
+
+        log_event(
+            "qa.assistance_attempt_completed",
+            request_id=request_id,
+            question=question,
+            confidence=final_confidence,
+            used_long_context_verification=used_long_context,
+            answer=answer,
+            citations=[
+                {
+                    "corpus": citation.corpus,
+                    "secid": citation.secid,
+                    "quote": citation.quote,
+                    "reason": citation.reason,
+                }
+                for citation in candidate.citations
+            ],
+        )
 
         return ChatResult(
             answer=answer,
@@ -158,18 +253,62 @@ class AnswerEngine:
         question: str,
         history: list[dict[str, str]],
         hits: list[RetrievedSection],
+        request_id: str | None = None,
     ) -> GeneratedAnswer:
-        payload = self._call_model_for_answer(question, history, hits)
+        payload = self._call_model_for_answer(question, history, hits, request_id=request_id)
         answer = payload_to_generated(payload)
 
         errors, valid_citations = validate_citations(answer.citations, hits)
+        log_event(
+            "qa.citation_validation_completed",
+            request_id=request_id,
+            question=question,
+            stage="initial",
+            validation_error_count=len(errors),
+            validation_errors=errors,
+            valid_citation_count=len(valid_citations),
+            insufficient_context=answer.insufficient_context,
+        )
         if errors and not answer.insufficient_context:
-            repaired = self._call_model_for_repair(question, history, hits, payload, errors)
+            log_event(
+                "qa.citation_repair_requested",
+                level="warning",
+                request_id=request_id,
+                question=question,
+                validation_errors=errors,
+            )
+
+            repaired = self._call_model_for_repair(
+                question,
+                history,
+                hits,
+                payload,
+                errors,
+                request_id=request_id,
+            )
             repaired_answer = payload_to_generated(repaired)
             errors, valid_citations = validate_citations(repaired_answer.citations, hits)
             answer = repaired_answer
 
+            log_event(
+                "qa.citation_validation_completed",
+                request_id=request_id,
+                question=question,
+                stage="repair",
+                validation_error_count=len(errors),
+                validation_errors=errors,
+                valid_citation_count=len(valid_citations),
+                insufficient_context=answer.insufficient_context,
+            )
+
         if errors and not answer.insufficient_context:
+            log_event(
+                "qa.citation_validation_failed",
+                level="warning",
+                request_id=request_id,
+                question=question,
+                validation_errors=errors,
+            )
             return GeneratedAnswer(
                 answer_markdown="I cannot provide a grounded answer from the retrieved legal text.",
                 citations=[],
@@ -191,6 +330,7 @@ class AnswerEngine:
         question: str,
         history: list[dict[str, str]],
         hits: list[RetrievedSection],
+        request_id: str | None = None,
     ) -> ModelAnswerPayload:
         system_prompt = (
             "You are a legal QA assistant for Somerville municipal law. "
@@ -202,13 +342,52 @@ class AnswerEngine:
         )
 
         user_prompt = build_answer_user_prompt(question=question, history=history, hits=hits)
+        log_event(
+            "qa.model_request_sent",
+            request_id=request_id,
+            question=question,
+            stage="answer",
+            provider=self.provider.name,
+            model=self.settings.model_name,
+            system_prompt_length=len(system_prompt),
+            user_prompt_length=len(user_prompt),
+            max_tokens=1800,
+        )
         raw = self.provider.generate(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             temperature=0.0,
             max_tokens=1800,
         ).content
-        return parse_model_payload(raw)
+        log_event(
+            "qa.model_response_received",
+            request_id=request_id,
+            question=question,
+            stage="answer",
+            raw_response=raw,
+        )
+        try:
+            payload = parse_model_payload(raw)
+        except Exception as exc:
+            log_event(
+                "qa.model_response_parse_failed",
+                level="error",
+                request_id=request_id,
+                question=question,
+                stage="answer",
+                raw_response=raw,
+                error=serialize_exception(exc),
+            )
+            raise
+
+        log_event(
+            "qa.model_response_parsed",
+            request_id=request_id,
+            question=question,
+            stage="answer",
+            payload=payload,
+        )
+        return payload
 
     def _call_model_for_repair(
         self,
@@ -217,6 +396,7 @@ class AnswerEngine:
         hits: list[RetrievedSection],
         prior_payload: ModelAnswerPayload,
         errors: list[str],
+        request_id: str | None = None,
     ) -> ModelAnswerPayload:
         system_prompt = (
             "You are repairing citation grounding errors in a legal QA response. "
@@ -238,13 +418,54 @@ class AnswerEngine:
             f"{render_section_context(hits)}"
         )
 
+        log_event(
+            "qa.model_request_sent",
+            request_id=request_id,
+            question=question,
+            stage="repair",
+            provider=self.provider.name,
+            model=self.settings.model_name,
+            validation_errors=errors,
+            system_prompt_length=len(system_prompt),
+            user_prompt_length=len(user_prompt),
+            max_tokens=1800,
+        )
         raw = self.provider.generate(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             temperature=0.0,
             max_tokens=1800,
         ).content
-        return parse_model_payload(raw)
+        log_event(
+            "qa.model_response_received",
+            request_id=request_id,
+            question=question,
+            stage="repair",
+            raw_response=raw,
+        )
+
+        try:
+            payload = parse_model_payload(raw)
+        except Exception as exc:
+            log_event(
+                "qa.model_response_parse_failed",
+                level="error",
+                request_id=request_id,
+                question=question,
+                stage="repair",
+                raw_response=raw,
+                error=serialize_exception(exc),
+            )
+            raise
+
+        log_event(
+            "qa.model_response_parsed",
+            request_id=request_id,
+            question=question,
+            stage="repair",
+            payload=payload,
+        )
+        return payload
 
     def _to_citation_views(
         self,
@@ -307,10 +528,31 @@ class AnswerEngine:
         clarification_question: str,
         confidence: Confidence = "low",
         used_long_context: bool = False,
+        request_id: str | None = None,
+        question: str | None = None,
+        refusal_reason: str = "insufficient_grounding",
+        refusal_error: dict[str, str] | None = None,
     ) -> ChatResult:
         answer = (
             "I can’t answer that reliably from the retrieved Somerville law text without risking an incorrect statement. "
             "Please narrow the question so I can cite exact sections."
+        )
+        log_event(
+            "qa.assistance_attempt_refused",
+            level="error" if refusal_error else "warning",
+            request_id=request_id,
+            question=question,
+            reason=refusal_reason,
+            error=refusal_error,
+            confidence=confidence,
+            clarification_question=clarification_question,
+            used_long_context_verification=used_long_context,
+            retrieval_trace={
+                "requested_corpora": sorted(trace.requested_corpora),
+                "query_tokens": trace.query_tokens,
+                "top_score": trace.top_score,
+                "second_score": trace.second_score,
+            },
         )
         return ChatResult(
             answer=answer,

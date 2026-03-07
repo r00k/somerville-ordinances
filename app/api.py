@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Optional
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -12,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from .config import AppSettings, load_settings
 from .corpus import CorpusBundle, load_corpus_sections
+from .observability import configure_observability, log_event, serialize_exception
 from .provider import ModelProvider, build_provider
 from .qa import AnswerEngine
 from .retrieval import SectionIndex
@@ -74,6 +76,7 @@ def get_runtime() -> AppRuntime:
 def create_app(runtime: AppRuntime | None = None) -> FastAPI:
     app = FastAPI(title="Somerville Law Assistant", version="0.1.0")
     active_runtime = runtime or get_runtime()
+    configure_observability(active_runtime.settings.observability_log_level)
 
     static_dir = Path(__file__).resolve().parent / "static"
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
@@ -95,17 +98,46 @@ def create_app(runtime: AppRuntime | None = None) -> FastAPI:
 
     @app.post("/api/chat", response_model=ChatResponse)
     async def chat(req: ChatRequest) -> ChatResponse:
+        request_id = str(uuid4())
         message = req.message.strip()
         if not message:
+            log_event(
+                "chat.validation_failed",
+                level="warning",
+                request_id=request_id,
+                question=req.message,
+                response_status=400,
+                error={"type": "ValidationError", "message": "Message cannot be empty."},
+            )
             raise HTTPException(status_code=400, detail="Message cannot be empty.")
 
         max_history = active_runtime.settings.max_history_messages
         history_items = req.history[-max_history:] if max_history else []
         history = [{"role": item.role, "content": item.content.strip()} for item in history_items]
 
+        log_event(
+            "chat.request_received",
+            request_id=request_id,
+            question=message,
+            history=history,
+            history_count=len(history),
+            provider=active_runtime.provider.name,
+            model=active_runtime.settings.model_name,
+        )
+
         try:
-            result = active_runtime.engine.ask(question=message, history=history)
+            result = active_runtime.engine.ask(question=message, history=history, request_id=request_id)
         except Exception as exc:  # pragma: no cover - surfaced in API response for manual testing
+            log_event(
+                "chat.request_failed",
+                level="error",
+                request_id=request_id,
+                question=message,
+                history=history,
+                response_status=500,
+                error=serialize_exception(exc),
+                response_body={"detail": f"QA pipeline failed: {exc}"},
+            )
             raise HTTPException(status_code=500, detail=f"QA pipeline failed: {exc}") from exc
 
         citations = [
@@ -121,7 +153,7 @@ def create_app(runtime: AppRuntime | None = None) -> FastAPI:
             for item in result.citations
         ]
 
-        return ChatResponse(
+        response = ChatResponse(
             answer=result.answer,
             citations=citations,
             confidence=result.confidence,
@@ -131,6 +163,16 @@ def create_app(runtime: AppRuntime | None = None) -> FastAPI:
             used_long_context_verification=result.used_long_context_verification,
             requested_corpora=sorted(result.retrieval_trace.requested_corpora),
         )
+
+        log_event(
+            "chat.response_emitted",
+            request_id=request_id,
+            question=message,
+            response_status=200,
+            response=response.model_dump(),
+        )
+
+        return response
 
     return app
 

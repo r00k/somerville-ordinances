@@ -130,6 +130,16 @@ Relevant settings (see `.env.example`):
 - `MODEL_API_KEY` or provider-specific key (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`)
 - `ENABLE_LONG_CONTEXT_VERIFICATION` (optional second-pass check for broad/low-confidence queries)
 - retrieval tuning options (`RETRIEVAL_TOP_K`, `RETRIEVAL_EXCERPT_CHARS`, etc.)
+- `OBSERVABILITY_LOG_LEVEL` (`DEBUG`, `INFO`, `WARNING`, etc.)
+
+## Structured Observability Logs
+
+The chat backend emits JSON log events for production debugging and traceability. Each event includes a `request_id` so you can correlate a single question across retrieval, model attempts, response generation, and failures.
+
+Key event families:
+
+- `chat.*` for API request intake, validation failures, emitted responses, and 500 errors.
+- `qa.*` for assistance attempts (retrieval results, model requests/responses, citation validation/repair, refusal reasons, and completion).
 
 ## App Correctness Guardrails
 
