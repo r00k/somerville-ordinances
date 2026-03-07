@@ -32,6 +32,7 @@ It now also includes a local web app with a ChatGPT-style interface for grounded
 - `requirements.txt`: dependencies for fetch/render + web app.
 - `.env.example`: provider-agnostic runtime configuration template.
 - `scripts/verify_app_answers.py`: end-to-end answer verification for critical questions.
+- `scripts/backfill_pgvector.py`: loads sections into Postgres and backfills embeddings.
 - `somerville-law-non-zoning.md`: primary consolidated markdown output.
 - `somerville-law-non-zoning.raw.html`: bundled raw source HTML used for auditability.
 - `somerville-law-non-zoning.readable.html`: styled reading edition.
@@ -68,7 +69,7 @@ Expected outputs:
 The app serves a public-facing chat experience with strict grounding controls:
 
 - loads both corpora (`somerville-law-non-zoning.md` + `somerville-zoning.md`),
-- retrieves secid-aware sections,
+- retrieves secid-aware sections with lexical + semantic ranking,
 - requires citations tied to retrieved sections,
 - validates citation quotes server-side,
 - refuses/asks clarification if grounding is insufficient.
@@ -100,6 +101,23 @@ docker run --rm -p 8000:8000 \
   somerville-law-assistant
 ```
 
+## Hybrid Retrieval Setup (Postgres + pgvector)
+
+Hybrid retrieval is enabled automatically when `POSTGRES_DSN` is set.
+
+```bash
+# Example env (can also be placed in .env)
+export POSTGRES_DSN='postgresql://user:pass@localhost:5432/somerville'
+export OPENAI_API_KEY='...'
+export EMBEDDING_MODEL='text-embedding-3-small'
+
+# Create/refresh schema + section rows + embeddings
+python3 scripts/backfill_pgvector.py --batch-size 64
+
+# Run the app (hybrid retrieval will be active)
+python3 -m uvicorn app.api:app --host 127.0.0.1 --port 8000 --reload
+```
+
 ## Model Provider Swapping
 
 The model layer is provider-agnostic. Retrieval + citation validation behavior stays the same while swapping only env config.
@@ -128,6 +146,8 @@ Relevant settings (see `.env.example`):
 - `MODEL_PROVIDER` (`mock`, `openai`, `anthropic`)
 - `MODEL_NAME`
 - `MODEL_API_KEY` or provider-specific key (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`)
+- `POSTGRES_DSN` (enables hybrid retrieval when set)
+- `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_API_KEY`
 - `ENABLE_LONG_CONTEXT_VERIFICATION` (optional second-pass check for broad/low-confidence queries)
 - retrieval tuning options (`RETRIEVAL_TOP_K`, `RETRIEVAL_EXCERPT_CHARS`, etc.)
 - `OBSERVABILITY_LOG_LEVEL` (`DEBUG`, `INFO`, `WARNING`, etc.)
@@ -146,7 +166,7 @@ Key event families:
 The chat backend enforces:
 
 - corpus routing across zoning/non-zoning based on query intent,
-- lexical retrieval over secid sections,
+- hybrid lexical + semantic retrieval over secid sections,
 - closed-book answer generation from retrieved text only,
 - strict machine-readable citations (`corpus`, `secid`, `quote`, `reason`),
 - quote-substring validation against source section text,

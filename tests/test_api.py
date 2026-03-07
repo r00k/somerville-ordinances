@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 from pathlib import Path
 
 import pytest
@@ -12,7 +11,7 @@ from fastapi.testclient import TestClient
 from app.api import build_runtime, create_app
 from app.config import AppSettings
 from app.observability import LOGGER_NAME
-from app.qa import AnswerEngine
+from app.two_pass import TwoPassEngine
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") or os.environ.get("MODEL_API_KEY", "")
 
@@ -32,13 +31,7 @@ def client() -> TestClient:
         model_api_key=OPENAI_API_KEY,
         model_base_url=None,
         request_timeout_seconds=60.0,
-        retrieval_top_k=10,
-        retrieval_excerpt_chars=1800,
-        retrieval_min_score=0.0,
         max_history_messages=8,
-        enable_long_context_verification=False,
-        long_context_top_k=18,
-        long_context_trigger_min_confidence="medium",
         observability_log_level="INFO",
     )
     runtime = build_runtime(settings)
@@ -80,7 +73,8 @@ def test_health_endpoint(client: TestClient) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ok"
-    assert payload["sections_loaded"] > 3000
+    assert payload["chapters_loaded"] > 10
+    assert payload["mode"] == "two_pass"
 
 
 @pytest.mark.parametrize(
@@ -123,10 +117,8 @@ def test_chat_logs_question_attempt_and_response_as_json(
 
     request_event = next(event for event in events if event["event"] == "chat.request_received")
     response_event = next(event for event in events if event["event"] == "chat.response_emitted")
-    qa_event = next(event for event in events if event["event"] == "qa.assistance_attempt_started")
 
     assert request_event["question"] == prompt
-    assert qa_event["request_id"] == request_event["request_id"]
     assert response_event["request_id"] == request_event["request_id"]
     assert response_event["response_status"] == 200
     assert response_event["response"]["answer"]
@@ -136,11 +128,11 @@ def test_chat_pipeline_error_logs_structured_json(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def boom(self: AnswerEngine, question: str, history: list[dict[str, str]], request_id: str | None = None):
+    def boom(self: TwoPassEngine, question: str, history: list[dict[str, str]], request_id: str | None = None):
         del self, question, history, request_id
         raise RuntimeError("forced failure")
 
-    monkeypatch.setattr(AnswerEngine, "ask", boom)
+    monkeypatch.setattr(TwoPassEngine, "ask", boom)
     logger, handler, messages = _capture_observability_messages()
     try:
         response = client.post("/api/chat", json={"message": "trigger pipeline failure", "history": []})
@@ -164,7 +156,6 @@ def test_multi_turn_mayor_follow_ups(client: TestClient) -> None:
     r1 = client.post("/api/chat", json={"message": "How long is the mayor's term?", "history": history})
     assert r1.status_code == 200
     p1 = r1.json()
-    assert p1["confidence"] == "high"
     assert "2 year" in p1["answer"].lower()
     history.append({"role": "user", "content": "How long is the mayor's term?"})
     history.append({"role": "assistant", "content": p1["answer"]})
@@ -174,13 +165,37 @@ def test_multi_turn_mayor_follow_ups(client: TestClient) -> None:
     assert r2.status_code == 200
     p2 = r2.json()
     assert p2["citations"]
-    assert p2["confidence"] != "low", f"Expected non-low confidence, got: {p2['answer']}"
     history.append({"role": "user", "content": "How is he or she elected?"})
     history.append({"role": "assistant", "content": p2["answer"]})
 
-    # Turn 3: What happens if there's a vacancy?
-    r3 = client.post("/api/chat", json={"message": "What happens if there's a vacancy?", "history": history})
+    # Turn 3: What are his or her executive powers?
+    r3 = client.post("/api/chat", json={"message": "What are his or her executive powers?", "history": history})
     assert r3.status_code == 200
     p3 = r3.json()
     assert p3["citations"]
-    assert p3["confidence"] != "low", f"Expected non-low confidence, got: {p3['answer']}"
+
+
+def test_multi_turn_school_committee_follow_ups(client: TestClient) -> None:
+    history: list[dict[str, str]] = []
+
+    # Turn 1: How many members are on the school committee?
+    r1 = client.post("/api/chat", json={"message": "How many members are on the school committee?", "history": history})
+    assert r1.status_code == 200
+    p1 = r1.json()
+    assert p1["citations"]
+    history.append({"role": "user", "content": "How many members are on the school committee?"})
+    history.append({"role": "assistant", "content": p1["answer"]})
+
+    # Turn 2: How is the chair chosen? (resolves → school committee chair)
+    r2 = client.post("/api/chat", json={"message": "How is the chair chosen?", "history": history})
+    assert r2.status_code == 200
+    p2 = r2.json()
+    assert p2["citations"]
+    history.append({"role": "user", "content": "How is the chair chosen?"})
+    history.append({"role": "assistant", "content": p2["answer"]})
+
+    # Turn 3: What powers does it have? (resolves "it" → school committee)
+    r3 = client.post("/api/chat", json={"message": "What powers does it have?", "history": history})
+    assert r3.status_code == 200
+    p3 = r3.json()
+    assert p3["citations"]

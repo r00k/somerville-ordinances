@@ -1,0 +1,127 @@
+"""Parse markdown corpus files into a table of contents with chapter-level text extraction."""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+
+from .types import CorpusName
+
+HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
+
+
+@dataclass(frozen=True)
+class TocChapter:
+    """A chapter/article-level entry in the table of contents."""
+
+    corpus: CorpusName
+    heading: str
+    heading_path: tuple[str, ...]
+    level: int
+    start_line: int  # 0-indexed inclusive
+    end_line: int  # 0-indexed exclusive
+    subheadings: tuple[str, ...]  # section-level headings within this chapter
+
+
+@dataclass(frozen=True)
+class CorpusToc:
+    """Full table of contents for both corpora, with access to raw lines for text extraction."""
+
+    chapters: list[TocChapter]
+    _lines_by_corpus: dict[CorpusName, list[str]]
+
+    def chapter_text(self, chapter: TocChapter) -> str:
+        lines = self._lines_by_corpus[chapter.corpus]
+        return "".join(lines[chapter.start_line : chapter.end_line])
+
+    def render_toc(self) -> str:
+        """Render a compact TOC string suitable for an LLM to pick from."""
+        parts: list[str] = []
+        current_corpus: CorpusName | None = None
+        for idx, ch in enumerate(self.chapters):
+            if ch.corpus != current_corpus:
+                current_corpus = ch.corpus
+                label = "NON-ZONING LAW" if current_corpus == "non_zoning" else "ZONING ORDINANCE"
+                parts.append(f"--- {label} ---")
+            heading = ch.heading
+            subs = "; ".join(ch.subheadings[:40])
+            if len(ch.subheadings) > 40:
+                subs += f"; ... (+{len(ch.subheadings) - 40} more)"
+            parts.append(
+                f"[{idx}] {heading}\n"
+                f"    Contains: {subs or '(no sub-sections)'}"
+            )
+        return "\n\n".join(parts)
+
+
+def _chapter_level(corpus: CorpusName) -> int:
+    """The heading level that defines a 'chapter' for each corpus.
+
+    non_zoning uses #### (level 4) for chapters (e.g., CHAPTER 1, DIVISION 1).
+    zoning uses ### (level 3) for top-level articles (e.g., 3. RESIDENCE DISTRICTS).
+    """
+    return 4 if corpus == "non_zoning" else 3
+
+
+def parse_toc(markdown_text: str, corpus: CorpusName) -> tuple[list[TocChapter], list[str]]:
+    """Parse a markdown file into chapter-level TOC entries."""
+    lines = markdown_text.splitlines(keepends=True)
+    chapter_level = _chapter_level(corpus)
+
+    # First pass: find all chapter-level headings and their line positions.
+    chapter_starts: list[tuple[int, str, int, list[str]]] = []  # (line, heading, level, heading_stack)
+    heading_stack = [""] * 7
+
+    for i, line in enumerate(lines):
+        m = HEADING_RE.match(line.strip())
+        if not m:
+            continue
+        level = len(m.group(1))
+        text = m.group(2).strip()
+        heading_stack[level] = text
+        for j in range(level + 1, 7):
+            heading_stack[j] = ""
+
+        if level == chapter_level:
+            path = [h for h in heading_stack[: level + 1] if h]
+            chapter_starts.append((i, text, level, list(path)))
+
+    # Second pass: for each chapter, collect subheadings.
+    chapters: list[TocChapter] = []
+    for ci, (start, heading, level, path) in enumerate(chapter_starts):
+        end = chapter_starts[ci + 1][0] if ci + 1 < len(chapter_starts) else len(lines)
+
+        subheadings: list[str] = []
+        for line in lines[start + 1 : end]:
+            m = HEADING_RE.match(line.strip())
+            if m:
+                sub_level = len(m.group(1))
+                if sub_level > level:
+                    subheadings.append(m.group(2).strip())
+
+        chapters.append(
+            TocChapter(
+                corpus=corpus,
+                heading=heading,
+                heading_path=tuple(path),
+                level=level,
+                start_line=start,
+                end_line=end,
+                subheadings=tuple(subheadings),
+            )
+        )
+
+    return chapters, lines
+
+
+def build_corpus_toc(
+    non_zoning_text: str,
+    zoning_text: str,
+) -> CorpusToc:
+    nz_chapters, nz_lines = parse_toc(non_zoning_text, "non_zoning")
+    z_chapters, z_lines = parse_toc(zoning_text, "zoning")
+
+    return CorpusToc(
+        chapters=nz_chapters + z_chapters,
+        _lines_by_corpus={"non_zoning": nz_lines, "zoning": z_lines},
+    )

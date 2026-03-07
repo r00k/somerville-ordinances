@@ -13,12 +13,6 @@ except Exception:  # pragma: no cover - optional dependency guard
 APP_ROOT = Path(__file__).resolve().parent.parent
 
 
-def _env_bool(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
 
 @dataclass(frozen=True)
 class AppSettings:
@@ -31,13 +25,7 @@ class AppSettings:
     model_api_key: str | None
     model_base_url: str | None
     request_timeout_seconds: float
-    retrieval_top_k: int
-    retrieval_excerpt_chars: int
-    retrieval_min_score: float
     max_history_messages: int
-    enable_long_context_verification: bool
-    long_context_top_k: int
-    long_context_trigger_min_confidence: str
     observability_log_level: str
 
 
@@ -71,12 +59,6 @@ def load_settings() -> AppSettings:
         model_api_key=model_api_key,
         model_base_url=os.getenv("MODEL_BASE_URL"),
         request_timeout_seconds=float(os.getenv("MODEL_TIMEOUT_SECONDS", "60")),
-        retrieval_top_k=max(1, int(os.getenv("RETRIEVAL_TOP_K", "10"))),
-        retrieval_excerpt_chars=max(400, int(os.getenv("RETRIEVAL_EXCERPT_CHARS", "1800"))),
-        retrieval_min_score=float(os.getenv("RETRIEVAL_MIN_SCORE", "0.05")),
         max_history_messages=max(0, int(os.getenv("MAX_HISTORY_MESSAGES", "8"))),
-        enable_long_context_verification=_env_bool("ENABLE_LONG_CONTEXT_VERIFICATION", False),
-        long_context_top_k=max(6, int(os.getenv("LONG_CONTEXT_TOP_K", "24"))),
-        long_context_trigger_min_confidence=os.getenv("LONG_CONTEXT_TRIGGER_MIN_CONFIDENCE", "medium").strip().lower(),
         observability_log_level=os.getenv("OBSERVABILITY_LOG_LEVEL", "INFO").strip().upper(),
     )

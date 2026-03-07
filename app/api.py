@@ -11,13 +11,11 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .citation_links import build_citation_links
 from .config import AppSettings, load_settings
-from .corpus import CorpusBundle, load_corpus_sections
 from .observability import configure_observability, log_event, serialize_exception
 from .provider import ModelProvider, build_provider
-from .qa import AnswerEngine
-from .retrieval import SectionIndex
+from .toc import CorpusToc, build_corpus_toc
+from .two_pass import TwoPassEngine
 
 
 class ChatMessage(BaseModel):
@@ -31,16 +29,9 @@ class ChatRequest(BaseModel):
 
 
 class CitationResponse(BaseModel):
-    corpus: Literal["non_zoning", "zoning"]
-    secid: str
-    heading: str
-    source_file: str
     quote: str
+    source_heading: str
     reason: str
-    score: float
-    url: Optional[str] = None
-    local_url: Optional[str] = None
-    official_url: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
@@ -49,26 +40,32 @@ class ChatResponse(BaseModel):
     confidence: Literal["low", "medium", "high"]
     needs_clarification: bool
     clarification_question: Optional[str]
-    used_long_context_verification: bool
-    requested_corpora: list[str]
+    selected_chapters: list[str]
 
 
 @dataclass(frozen=True)
 class AppRuntime:
     settings: AppSettings
-    corpus_bundle: CorpusBundle
-    index: SectionIndex
+    toc: CorpusToc
     provider: ModelProvider
-    engine: AnswerEngine
+    engine: TwoPassEngine
 
 
 def build_runtime(settings: AppSettings | None = None) -> AppRuntime:
     settings = settings or load_settings()
-    bundle = load_corpus_sections(settings.non_zoning_markdown, settings.zoning_markdown)
-    index = SectionIndex(bundle.sections)
+
+    non_zoning_text = settings.non_zoning_markdown.read_text(encoding="utf-8")
+    zoning_text = settings.zoning_markdown.read_text(encoding="utf-8")
+    toc = build_corpus_toc(non_zoning_text, zoning_text)
+
     provider = build_provider(settings)
-    engine = AnswerEngine(settings=settings, corpus_bundle=bundle, index=index, provider=provider)
-    return AppRuntime(settings=settings, corpus_bundle=bundle, index=index, provider=provider, engine=engine)
+    engine = TwoPassEngine(settings=settings, toc=toc, provider=provider)
+    return AppRuntime(
+        settings=settings,
+        toc=toc,
+        provider=provider,
+        engine=engine,
+    )
 
 
 @lru_cache(maxsize=1)
@@ -108,9 +105,8 @@ def create_app(runtime: AppRuntime | None = None) -> FastAPI:
             "status": "ok",
             "provider": active_runtime.provider.name,
             "model": active_runtime.settings.model_name,
-            "sections_loaded": len(active_runtime.corpus_bundle.sections),
-            "retrieval_top_k": active_runtime.settings.retrieval_top_k,
-            "long_context_verification": active_runtime.settings.enable_long_context_verification,
+            "chapters_loaded": len(active_runtime.toc.chapters),
+            "mode": "two_pass",
         }
 
     @app.post("/api/chat", response_model=ChatResponse)
@@ -157,25 +153,14 @@ def create_app(runtime: AppRuntime | None = None) -> FastAPI:
             )
             raise HTTPException(status_code=500, detail=f"QA pipeline failed: {exc}") from exc
 
-        citations: list[CitationResponse] = []
-        for item in result.citations:
-            section = active_runtime.corpus_bundle.by_key.get((item.corpus, item.secid))
-            links = build_citation_links(section, active_runtime.settings) if section else None
-
-            citations.append(
-                CitationResponse(
-                    corpus=item.corpus,
-                    secid=item.secid,
-                    heading=item.heading,
-                    source_file=item.source_file,
-                    quote=item.quote,
-                    reason=item.reason,
-                    score=item.score,
-                    url=links.url if links else None,
-                    local_url=links.local_url if links else None,
-                    official_url=links.official_url if links else None,
-                )
+        citations = [
+            CitationResponse(
+                quote=item.quote,
+                source_heading=item.source_heading,
+                reason=item.reason,
             )
+            for item in result.citations
+        ]
 
         response = ChatResponse(
             answer=result.answer,
@@ -183,8 +168,7 @@ def create_app(runtime: AppRuntime | None = None) -> FastAPI:
             confidence=result.confidence,
             needs_clarification=result.needs_clarification,
             clarification_question=result.clarification_question,
-            used_long_context_verification=result.used_long_context_verification,
-            requested_corpora=sorted(result.retrieval_trace.requested_corpora),
+            selected_chapters=result.selected_chapters,
         )
 
         log_event(

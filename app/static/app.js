@@ -89,36 +89,15 @@ function appendMessage({ role, content, meta = "", citations = [] }) {
       label.className = "citation-label";
       label.textContent = "Citation";
 
-      const primaryUrl = citation.url || citation.local_url || citation.official_url || "";
-      const title = document.createElement(primaryUrl ? "a" : "div");
+      const title = document.createElement("div");
       title.className = "citation-heading";
-      title.textContent = citation.heading;
-      if (primaryUrl) {
-        title.href = primaryUrl;
-        title.target = "_blank";
-        title.rel = "noopener noreferrer";
-      }
+      title.textContent = citation.source_heading;
 
       const quote = document.createElement("span");
       quote.className = "quote";
       quote.textContent = `\u201c${citation.quote}\u201d`;
 
-      const links = document.createElement("div");
-      links.className = "citation-links";
-
-      if (citation.official_url && citation.official_url !== primaryUrl) {
-        const official = document.createElement("a");
-        official.href = citation.official_url;
-        official.target = "_blank";
-        official.rel = "noopener noreferrer";
-        official.textContent = "Official source";
-        links.appendChild(official);
-      }
-
       wrap.append(label, title, quote);
-      if (links.childNodes.length) {
-        wrap.appendChild(links);
-      }
       citationsEl.appendChild(wrap);
     }
   }
@@ -138,7 +117,7 @@ async function loadHealth() {
       throw new Error(`HTTP ${response.status}`);
     }
     const data = await response.json();
-    healthEl.textContent = `Provider: ${data.provider} · Model: ${data.model} · Sections: ${data.sections_loaded.toLocaleString()}`;
+    healthEl.textContent = `Provider: ${data.provider} · Model: ${data.model} · Chapters: ${data.chapters_loaded} · Mode: ${data.mode}`;
   } catch (err) {
     healthEl.textContent = "Backend health check failed. Confirm the server is running.";
   }
@@ -181,7 +160,7 @@ async function sendMessage(message) {
     }
 
     const data = await response.json();
-    const meta = `Confidence: ${data.confidence}${data.used_long_context_verification ? " · long-context check" : ""}`;
+    const meta = `Confidence: ${data.confidence}`;
 
     appendMessage({
       role: "assistant",
