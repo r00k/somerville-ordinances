@@ -9,6 +9,20 @@ from .types import CorpusName
 
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 
+_STOP_WORDS = frozenset({
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "shall",
+    "should", "may", "might", "must", "can", "could", "of", "in", "to",
+    "for", "with", "on", "at", "from", "by", "about", "as", "into",
+    "through", "during", "before", "after", "above", "below", "between",
+    "and", "but", "or", "nor", "not", "no", "so", "if", "then", "than",
+    "that", "this", "these", "those", "it", "its", "he", "she", "his",
+    "her", "how", "what", "which", "who", "whom", "when", "where", "why",
+    "long", "many", "much", "term", "terms",
+    # Domain-specific: too common in municipal law headings to be useful
+    "ordinance", "city", "street", "section", "article",
+})
+
 
 @dataclass(frozen=True)
 class TocSearchHit:
@@ -19,7 +33,7 @@ class TocSearchHit:
     heading: str
     heading_path: tuple[str, ...]
     subheadings: tuple[str, ...]
-    score: int
+    score: float
 
 
 @dataclass(frozen=True)
@@ -68,24 +82,53 @@ class CorpusToc:
                 for i, ch in enumerate(self.chapters[:limit])
             ]
 
-        terms = [t for t in re.split(r"\W+", query) if t]
-        hits: list[TocSearchHit] = []
+        all_tokens = [t for t in re.split(r"\W+", query) if len(t) > 1]
+        content_terms = [t for t in all_tokens if t not in _STOP_WORDS]
+        # Fall back to all tokens if stop-word filtering removes everything
+        search_terms = content_terms or all_tokens
 
-        for i, ch in enumerate(self.chapters):
+        # Pre-compute per-chapter searchable text
+        chapter_texts = []
+        for ch in self.chapters:
             heading = ch.heading.lower()
             path = " ".join(ch.heading_path).lower()
             subs = " ".join(ch.subheadings).lower()
+            chapter_texts.append((heading, path, subs))
 
-            score = 0
-            for term in terms:
-                if term in heading:
-                    score += 10
-                if term in path:
-                    score += 6
-                if term in subs:
-                    score += 3
+        # IDF-like weight: terms matching fewer chapters score higher
+        term_weights: dict[str, float] = {}
+        for term in search_terms:
+            pattern = r"\b" + re.escape(term)
+            doc_freq = sum(
+                1 for heading, path, subs in chapter_texts
+                if re.search(pattern, heading + " " + path + " " + subs)
+            )
+            # Rarer terms get higher weight; terms in 1 chapter → ~3x, in 100+ → ~1x
+            term_weights[term] = max(1.0, 5.0 - (doc_freq / len(self.chapters)) * 20)
+
+        hits: list[TocSearchHit] = []
+
+        for i, (heading, path, subs) in enumerate(chapter_texts):
+            searchable = heading + " " + path + " " + subs
+
+            score = 0.0
+            for term in search_terms:
+                w = term_weights[term]
+                # Prefix match to handle plurals/inflections (e.g. fence→fences)
+                pattern = r"\b" + re.escape(term)
+                if re.search(pattern, heading):
+                    score += 10 * w
+                if re.search(pattern, path):
+                    score += 6 * w
+                if re.search(pattern, subs):
+                    score += 3 * w
+
+            # Bonus for matching the full query as a phrase
+            if query in searchable:
+                score += 20
 
             if score > 0:
+                ch = self.chapters[i]
                 hits.append(
                     TocSearchHit(
                         chapter_index=i,

@@ -30,7 +30,7 @@ def client() -> TestClient:
         anthropic_api_key=ANTHROPIC_API_KEY,
         request_timeout_seconds=60.0,
         max_history_messages=8,
-        max_output_tokens=4096,
+        max_output_tokens=2048,
         toc_search_limit=8,
         observability_log_level="INFO",
     )

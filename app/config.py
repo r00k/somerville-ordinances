@@ -47,7 +47,7 @@ def load_settings() -> AppSettings:
         anthropic_api_key=anthropic_api_key,
         request_timeout_seconds=float(os.getenv("MODEL_TIMEOUT_SECONDS", "60")),
         max_history_messages=max(0, int(os.getenv("MAX_HISTORY_MESSAGES", "8"))),
-        max_output_tokens=int(os.getenv("MAX_OUTPUT_TOKENS", "4096")),
+        max_output_tokens=int(os.getenv("MAX_OUTPUT_TOKENS", "2048")),
         toc_search_limit=int(os.getenv("TOC_SEARCH_LIMIT", "8")),
         observability_log_level=os.getenv("OBSERVABILITY_LOG_LEVEL", "INFO").strip().upper(),
     )
