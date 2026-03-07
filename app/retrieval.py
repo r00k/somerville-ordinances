@@ -163,22 +163,6 @@ class SectionIndex:
                     elif phrase in text:
                         bonus += 2.1
 
-                if "city council" in query_lower and ("how many" in query_lower or "number" in query_lower):
-                    if "city council consisting of" in text:
-                        bonus += 4.2
-                    if "composition" in heading:
-                        bonus += 1.2
-
-                if "affordable" in query_lower and "unit" in query_lower:
-                    if "inclusionary" in text:
-                        bonus += 1.5
-                    if "%" in text:
-                        bonus += 0.8
-
-                if "demolish" in query_lower or "demolition" in query_lower:
-                    if "demolition permit" in text or "demolition review" in text:
-                        bonus += 2.4
-
                 if bonus > 0:
                     scores[doc_id] += bonus
 
@@ -311,15 +295,6 @@ def build_query_phrases(query: str) -> set[str]:
             continue
         phrases.add(f"{left} {right}")
 
-    if "city council" in query:
-        phrases.add("city council")
-    if "inclusionary zoning" in query:
-        phrases.add("inclusionary zoning")
-    if "demolish" in query:
-        phrases.add("demolish")
-    if "demolition" in query:
-        phrases.add("demolition")
-
     return phrases
 
 
@@ -333,22 +308,4 @@ def normalize_token(token: str) -> str:
 
 
 def expand_query_tokens(query: str, base_tokens: list[str]) -> list[str]:
-    expanded = list(base_tokens)
-
-    if "city council" in query and ("how many" in query or "number" in query):
-        expanded.extend(["members", "composition", "consisting"])
-
-    if "affordable" in query and "unit" in query:
-        expanded.extend(["inclusionary", "percent", "dwelling"])
-
-    if "demolish" in query or "demolition" in query:
-        expanded.extend(["demolition", "permit", "review", "historic"])
-
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for token in expanded:
-        if token in seen:
-            continue
-        seen.add(token)
-        deduped.append(token)
-    return deduped
+    return list(base_tokens)

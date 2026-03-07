@@ -42,6 +42,20 @@ function renderMarkdown(text) {
   if (inTable) out.push("</table>");
   html = out.join("\n");
 
+  // Headings (###, ##, #)
+  html = html.replace(/^#{3}\s+(.+)$/gm, "<h3>$1</h3>");
+  html = html.replace(/^#{2}\s+(.+)$/gm, "<h2>$1</h2>");
+  html = html.replace(/^#{1}\s+(.+)$/gm, "<h1>$1</h1>");
+
+  // Unordered lists (- item)
+  html = html.replace(/(^|\n)(- .+(?:\n- .+)*)/g, function (_, before, block) {
+    const items = block
+      .split("\n")
+      .map((l) => "<li>" + l.replace(/^- /, "") + "</li>")
+      .join("");
+    return before + "<ul>" + items + "</ul>";
+  });
+
   // Bold and italic
   html = html.replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>");
   html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
@@ -52,6 +66,8 @@ function renderMarkdown(text) {
   html = "<p>" + html + "</p>";
   html = html.replace(/<p>\s*<table>/g, "<table>");
   html = html.replace(/<\/table>\s*<\/p>/g, "</table>");
+  html = html.replace(/<p>\s*<(h[1-3]|ul)>/g, "<$1>");
+  html = html.replace(/<\/(h[1-3]|ul)>\s*<\/p>/g, "</$1>");
 
   return html;
 }
@@ -114,6 +130,14 @@ async function sendMessage(message) {
   appendMessage({ role: "user", content: message });
   history.push({ role: "user", content: message });
 
+  const thinking = document.createElement("article");
+  thinking.className = "message assistant thinking";
+  thinking.innerHTML =
+    '<header><span class="role">Assistant</span></header>' +
+    '<div class="content"><span class="thinking-dots"><span>.</span><span>.</span><span>.</span></span> Thinking</div>';
+  messagesEl.appendChild(thinking);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+
   try {
     const payload = {
       message,
@@ -149,6 +173,7 @@ async function sendMessage(message) {
       meta: "error",
     });
   } finally {
+    thinking.remove();
     sendBtn.disabled = false;
   }
 }
@@ -174,7 +199,7 @@ promptEl.addEventListener("keydown", (event) => {
 appendMessage({
   role: "assistant",
   content:
-    "Ask a legal question and I will answer only from cited Somerville ordinance sections. If I can't ground it, I'll say so.",
+    "Ask me anything about Somerville ordinances. I'll answer based on cited sections.",
   meta: "ready",
 });
 

@@ -23,9 +23,14 @@ def configure_observability(level_name: str = "INFO") -> None:
     if _CONFIGURED:
         return
 
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(message)s"))
-    logger.handlers = [handler]
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(logging.Formatter("%(message)s"))
+
+    log_path = Path(__file__).resolve().parent.parent / "server.log"
+    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    file_handler.setFormatter(logging.Formatter("%(message)s"))
+
+    logger.handlers = [stream_handler, file_handler]
     logger.propagate = False
     _CONFIGURED = True
 
