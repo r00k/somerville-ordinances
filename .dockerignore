@@ -8,5 +8,10 @@ venv/
 .vscode/
 
 *.raw.html
-*.readable.html
 *.pdf
+tests/
+server.log
+start.sh
+.env
+.env.example
+.pytest_cache/

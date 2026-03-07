@@ -14,4 +14,4 @@ ENV MODEL_NAME=claude-sonnet-4-6
 
 EXPOSE 8000
 
-CMD ["python", "-m", "uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "gunicorn app.api:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8000}"]
