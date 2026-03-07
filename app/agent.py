@@ -37,11 +37,12 @@ Answering rules:
 - Use bold sparingly — only for the single most important fact, if any.
 - If the retrieved text is insufficient, ask a clarification question.
 
-Return ONLY a raw JSON object (no markdown fences, no extra text) with this shape:
-{"answer_markdown": string, "citations": [{"quote": string, "source_heading": string, "reason": string}], \
+YOUR FINAL RESPONSE MUST BE EXACTLY ONE JSON OBJECT — no prose, no markdown fences, no explanation before or after.
+Shape: {"answer_markdown": string, "citations": [{"quote": string, "source_heading": string, "reason": string}], \
 "confidence": "low"|"medium"|"high", "clarification_question": string|null}
 
-IMPORTANT: The JSON must be valid. Escape double quotes inside string values with backslash.\
+The JSON must be valid. Escape double quotes inside string values with backslash. \
+Do NOT return plain text — always return the JSON object.\
 """
 
 

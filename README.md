@@ -40,80 +40,52 @@ Expected outputs:
 
 ## Legal QA Web App (Chat Interface)
 
-The app serves a public-facing chat experience with strict grounding controls.
+The app serves a chat interface for grounded legal Q&A over both corpora, powered by an Anthropic agent with tool use.
 
-### Two-Pass Architecture
+### How It Works
 
-The QA engine uses a two-pass approach to answer questions:
+The agent uses Claude (`claude-sonnet-4-6` by default) with two tools:
 
-**Pass 1 — Chapter Selection (cheap model).** At startup, the app parses both markdown corpora into a table of contents listing every chapter and its subheadings. When a question arrives, this TOC is sent to a fast, inexpensive model (`gpt-4.1-mini` by default, configurable via `PASS1_MODEL_NAME`) which selects the 1–3 most relevant chapters by index.
+1. **`search_toc`** — keyword search over a table of contents built from both markdown corpora at startup.
+2. **`get_section`** — retrieves the full text of a chapter by index.
 
-**Pass 2 — Answer Generation (capable model).** The full text of the selected chapters is sent to the primary model (`gpt-5.4` by default, configurable via `MODEL_NAME`) along with the user's question and conversation history. This model generates an answer with citations grounded in the retrieved text.
+On each question the agent searches the TOC, fetches the relevant chapters, then answers with citations grounded in the retrieved text. Multi-turn conversation history is supported.
 
-This split keeps costs low (the TOC selection task is simple enough for a mini model) while preserving answer quality for the generation step.
-
-Additional guardrails:
-- requires citations tied to retrieved sections,
-- refuses or asks clarification if grounding is insufficient,
-- supports multi-turn conversation with history.
-
-Run locally:
+### Run Locally
 
 ```bash
 python3 -m pip install -r requirements.txt
-
-# Optional: copy and edit provider/runtime settings
-cp .env.example .env
-
-# Default offline mode uses MODEL_PROVIDER=mock
-python3 main.py
-
-# or
-python3 -m uvicorn app.api:app --host 127.0.0.1 --port 8000 --reload
+cp .env.example .env   # add your ANTHROPIC_API_KEY
+./start.sh
 ```
 
 Open `http://127.0.0.1:8000`.
 
-Container run:
+### Deploy to Railway
+
+The repo includes a `Dockerfile` and `railway.json` for one-step Railway deployment:
+
+1. Connect the GitHub repo in the [Railway dashboard](https://railway.com).
+2. Set the `ANTHROPIC_API_KEY` environment variable in the service settings.
+3. Railway auto-builds from the Dockerfile, runs health checks on `/health`, and assigns a public URL.
+
+Or deploy from the CLI:
 
 ```bash
-docker build -t somerville-law-assistant .
-docker run --rm -p 8000:8000 \
-  -e MODEL_PROVIDER=mock \
-  -e MODEL_NAME=mock-local \
-  somerville-law-assistant
+railway link
+railway up
 ```
 
-## Model Provider Swapping
+### Configuration
 
-The model layer is provider-agnostic. Retrieval + citation validation behavior stays the same while swapping only env config.
+All settings are via environment variables (see `.env.example`):
 
-Examples:
-
-```bash
-# OpenAI
-MODEL_PROVIDER=openai \
-MODEL_NAME=gpt-5.4 \
-OPENAI_API_KEY=... \
-python3 -m uvicorn app.api:app --host 127.0.0.1 --port 8000
-
-# Anthropic
-MODEL_PROVIDER=anthropic \
-MODEL_NAME=claude-sonnet-4-5 \
-ANTHROPIC_API_KEY=... \
-python3 -m uvicorn app.api:app --host 127.0.0.1 --port 8000
-
-# Generic key override (works for either provider)
-MODEL_PROVIDER=openai MODEL_API_KEY=... python3 main.py
-```
-
-Relevant settings (see `.env.example`):
-
-- `MODEL_PROVIDER` (`openai`, `anthropic`)
-- `MODEL_NAME` (primary model for answer generation, default `gpt-5.4`)
-- `PASS1_MODEL_NAME` (cheaper model for chapter selection, default `gpt-4.1-mini`)
-- `MODEL_API_KEY` or provider-specific key (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`)
-- `OBSERVABILITY_LOG_LEVEL` (`DEBUG`, `INFO`, `WARNING`, etc.)
+- `ANTHROPIC_API_KEY` — required
+- `MODEL_NAME` — model for the agent (default `claude-sonnet-4-6`)
+- `MAX_HISTORY_MESSAGES` — conversation turns to include (default `8`)
+- `MAX_OUTPUT_TOKENS` — max response tokens (default `4096`)
+- `TOC_SEARCH_LIMIT` — max TOC search results per query (default `8`)
+- `OBSERVABILITY_LOG_LEVEL` — structured log level (default `INFO`)
 
 ## Known Limitations
 

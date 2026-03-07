@@ -123,10 +123,10 @@ class CorpusToc:
 def _chapter_level(corpus: CorpusName) -> int:
     """The heading level that defines a 'chapter' for each corpus.
 
-    non_zoning uses #### (level 4) for chapters (e.g., CHAPTER 1, DIVISION 1).
-    zoning uses ### (level 3) for top-level articles (e.g., 3. RESIDENCE DISTRICTS).
+    non_zoning uses ##### (level 5) for articles (e.g., ARTICLE 3. EXECUTIVE BRANCH).
+    zoning uses #### (level 4) for sub-articles (e.g., 1.2 ADOPTION & EFFECT).
     """
-    return 4 if corpus == "non_zoning" else 3
+    return 5 if corpus == "non_zoning" else 4
 
 
 def parse_toc(markdown_text: str, corpus: CorpusName) -> tuple[list[TocChapter], list[str]]:
