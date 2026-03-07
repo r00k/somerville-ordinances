@@ -188,6 +188,60 @@ class TestSearchEdgeCases:
 # Search: prefix matching (plurals / inflections)
 # ---------------------------------------------------------------------------
 
+class TestSearchSynonymExpansion:
+    """Queries using everyday vocabulary should find chapters with formal/legal headings."""
+
+    def test_tattoo_finds_body_art(self, toc: CorpusToc) -> None:
+        headings = _top_headings(toc, "tattoo")
+        assert any("BODY ART" in h for h in headings)
+
+    def test_tattoos_plural_finds_body_art(self, toc: CorpusToc) -> None:
+        headings = _top_headings(toc, "tattoos")
+        assert any("BODY ART" in h for h in headings)
+
+    def test_chicken_finds_non_domesticated_animals(self, toc: CorpusToc) -> None:
+        headings = _top_headings(toc, "chicken")
+        assert "ARTICLE III. NON-DOMESTICATED ANIMALS" in headings
+
+    def test_can_i_keep_chickens(self, toc: CorpusToc) -> None:
+        headings = _top_headings(toc, "can I keep chickens")
+        assert "ARTICLE III. NON-DOMESTICATED ANIMALS" in headings
+
+    def test_busking_finds_street_performers(self, toc: CorpusToc) -> None:
+        headings = _top_headings(toc, "busking")
+        assert "ARTICLE VII. STREET PERFORMERS*" in headings
+
+    def test_crosswalk_finds_pedestrian_sections(self, toc: CorpusToc) -> None:
+        headings = _top_headings(toc, "crosswalk")
+        assert any("Pedestrian" in h or "pedestrian" in h.lower() for h in headings)
+
+    def test_landmark_finds_historic_districts(self, toc: CorpusToc) -> None:
+        headings = _top_headings(toc, "landmark")
+        assert "ARTICLE II. HISTORIC DISTRICTS*" in headings
+
+    def test_liquor_license_finds_alcoholic_beverage(self, toc: CorpusToc) -> None:
+        headings = _top_headings(toc, "liquor license")
+        assert "ARTICLE IX. ALCOHOLIC BEVERAGE LICENSES" in headings
+
+    def test_airbnb_finds_short_term_rentals(self, toc: CorpusToc) -> None:
+        headings = _top_headings(toc, "airbnb")
+        assert "ARTICLE X. SHORT-TERM RENTALS" in headings
+
+    def test_garbage_finds_trash(self, toc: CorpusToc) -> None:
+        assert "ARTICLE II. TRASH*" in _top_headings(toc, "garbage")
+
+    def test_recycling_finds_trash(self, toc: CorpusToc) -> None:
+        assert "ARTICLE II. TRASH*" in _top_headings(toc, "recycling")
+
+    def test_natural_gas_ban_finds_fossil_fuel(self, toc: CorpusToc) -> None:
+        headings = _top_headings(toc, "natural gas ban")
+        assert "ARTICLE VII. FOSSIL FUEL FREE CONSTRUCTION" in headings
+
+    def test_eviction_finds_housing(self, toc: CorpusToc) -> None:
+        headings = _top_headings(toc, "eviction", n=5)
+        assert any("HOUSING" in h for h in headings)
+
+
 class TestSearchPrefixMatching:
     def test_singular_finds_plural_heading(self, toc: CorpusToc) -> None:
         # "fence" should find "FENCES & WALLS"
@@ -251,6 +305,23 @@ class TestSearchCorpora:
 # ---------------------------------------------------------------------------
 # chapter_at: bounds checking
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Search: stop words in natural questions shouldn't derail results
+# ---------------------------------------------------------------------------
+
+class TestSearchStopWordFiltering:
+    def test_keep_is_stop_word(self, toc: CorpusToc) -> None:
+        # "keep" should not match "Police to keep record of towed vehicles"
+        hits = toc.search("can I keep chickens", limit=3)
+        headings = [h.heading for h in hits]
+        assert not any("tow" in h.lower() for h in headings)
+
+    def test_somerville_is_stop_word(self, toc: CorpusToc) -> None:
+        # "somerville" is too common to be useful as a search term
+        hits = toc.search("somerville noise rules", limit=3)
+        assert any("PEACE" in h.heading or "noise" in h.heading.lower() for h in hits)
+
 
 class TestChapterAt:
     def test_valid_index(self, toc: CorpusToc) -> None:

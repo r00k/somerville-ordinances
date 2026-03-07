@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+import Stemmer
+from rank_bm25 import BM25Okapi
 
 from .types import CorpusName
 
@@ -19,9 +22,75 @@ _STOP_WORDS = frozenset({
     "that", "this", "these", "those", "it", "its", "he", "she", "his",
     "her", "how", "what", "which", "who", "whom", "when", "where", "why",
     "long", "many", "much", "term", "terms",
+    "keep", "get", "let", "put", "make", "go", "come", "take", "give",
+    "need", "want", "know", "think", "say", "tell", "ask", "use",
+    "my", "me", "your", "our", "am",
     # Domain-specific: too common in municipal law headings to be useful
     "ordinance", "city", "street", "section", "article",
+    "somerville", "municipal", "law", "regulation", "regulations",
+    "sec", "div", "division", "chapter", "appendix", "part",
 })
+
+# Synonym map: stemmed query term -> additional stemmed tokens to inject.
+# This bridges vocabulary gaps where users search with everyday words
+# but headings use formal/legal language. Keys and values are pre-stemmed.
+_SYNONYMS: dict[str, list[str]] = {
+    "tattoo": ["bodi", "art"],
+    "pierc": ["bodi", "art"],
+    "liquor": ["alcohol", "beverag"],
+    "booz": ["alcohol", "beverag"],
+    "chicken": ["non", "domest", "anim"],
+    "rooster": ["non", "domest", "anim"],
+    "goat": ["non", "domest", "anim"],
+    "busk": ["street", "perform"],
+    "crosswalk": ["pedestrian", "cross"],
+    "jaywalk": ["pedestrian", "cross"],
+    "airbnb": ["short", "rental"],
+    "vrbo": ["short", "rental"],
+    "landmark": ["histor", "district"],
+    "pothol": ["highway", "road"],
+    "rat": ["pest", "health"],
+    "rodent": ["pest", "health"],
+    "graffiti": ["offens", "properti"],
+    "recycl": ["trash"],
+    "garbag": ["trash"],
+    "rubbish": ["trash"],
+    "evict": ["hous", "stabl"],
+    "landlord": ["hous", "rental"],
+    "tenant": ["hous", "rental"],
+    "uber": ["taxi", "vehicl"],
+    "lyft": ["taxi", "vehicl"],
+    "natur": ["fossil", "fuel"],  # "natural gas" -> fossil fuel free construction
+}
+
+_stemmer = Stemmer.Stemmer("english")
+_TOKEN_RE = re.compile(r"\W+")
+
+
+def _split(text: str) -> list[str]:
+    """Split text into lowercase tokens, dropping single-character tokens."""
+    return [t for t in _TOKEN_RE.split(text.lower()) if len(t) > 1]
+
+
+def _tokenize(text: str) -> list[str]:
+    """Split, remove stop words, and stem."""
+    return _stemmer.stemWords([t for t in _split(text) if t not in _STOP_WORDS])
+
+
+def _tokenize_full(text: str) -> list[str]:
+    """Split and stem without stop-word filtering (for all-stop-word fallback)."""
+    return _stemmer.stemWords(_split(text))
+
+
+def _expand_synonyms(stemmed: list[str]) -> list[str]:
+    """Append synonym tokens for any stemmed query term that has a synonym entry."""
+    extra: list[str] = []
+    for token in stemmed:
+        if token in _SYNONYMS:
+            extra.extend(_SYNONYMS[token])
+    if not extra:
+        return stemmed
+    return stemmed + extra
 
 
 @dataclass(frozen=True)
@@ -55,6 +124,14 @@ class CorpusToc:
 
     chapters: list[TocChapter]
     _lines_by_corpus: dict[CorpusName, list[str]]
+    # BM25 indices (built at construction time via build_corpus_toc)
+    _heading_token_sets: list[set[str]] = field(repr=False)
+    _bm25_path: BM25Okapi = field(repr=False)
+    _bm25_sub: BM25Okapi = field(repr=False)
+    # Fallback indices for all-stop-word queries (include stop words)
+    _heading_token_sets_full: list[set[str]] = field(repr=False)
+    _bm25_path_full: BM25Okapi = field(repr=False)
+    _bm25_sub_full: BM25Okapi = field(repr=False)
 
     def chapter_text(self, chapter: TocChapter) -> str:
         lines = self._lines_by_corpus[chapter.corpus]
@@ -67,7 +144,7 @@ class CorpusToc:
         return self.chapters[chapter_index]
 
     def search(self, query: str, limit: int = 8) -> list[TocSearchHit]:
-        """Search the TOC by keyword. An empty query returns the first `limit` chapters."""
+        """Search the TOC by keyword using BM25. An empty query returns the first `limit` chapters."""
         query = query.strip().lower()
         if not query:
             return [
@@ -82,53 +159,50 @@ class CorpusToc:
                 for i, ch in enumerate(self.chapters[:limit])
             ]
 
-        all_tokens = [t for t in re.split(r"\W+", query) if len(t) > 1]
-        content_terms = [t for t in all_tokens if t not in _STOP_WORDS]
-        # Fall back to all tokens if stop-word filtering removes everything
-        search_terms = content_terms or all_tokens
+        raw_tokens = _split(query)
+        content_tokens = [t for t in raw_tokens if t not in _STOP_WORDS]
 
-        # Pre-compute per-chapter searchable text
-        chapter_texts = []
-        for ch in self.chapters:
-            heading = ch.heading.lower()
-            path = " ".join(ch.heading_path).lower()
-            subs = " ".join(ch.subheadings).lower()
-            chapter_texts.append((heading, path, subs))
-
-        # IDF-like weight: terms matching fewer chapters score higher
-        term_weights: dict[str, float] = {}
-        for term in search_terms:
-            pattern = r"\b" + re.escape(term)
-            doc_freq = sum(
-                1 for heading, path, subs in chapter_texts
-                if re.search(pattern, heading + " " + path + " " + subs)
+        if content_tokens:
+            stemmed = _stemmer.stemWords(content_tokens)
+            stemmed = _expand_synonyms(stemmed)
+            return self._ranked_search(
+                stemmed, self._heading_token_sets, self._bm25_path, self._bm25_sub, limit,
             )
-            # Rarer terms get higher weight; terms in 1 chapter → ~3x, in 100+ → ~1x
-            term_weights[term] = max(1.0, 5.0 - (doc_freq / len(self.chapters)) * 20)
+
+        # All tokens were stop words — search the full (unfiltered) indices
+        stemmed = _stemmer.stemWords(raw_tokens)
+        if not stemmed:
+            return []
+        return self._ranked_search(
+            stemmed, self._heading_token_sets_full, self._bm25_path_full, self._bm25_sub_full, limit,
+        )
+
+    def _ranked_search(
+        self,
+        query_tokens: list[str],
+        heading_sets: list[set[str]],
+        bm25_path: BM25Okapi,
+        bm25_sub: BM25Okapi,
+        limit: int,
+    ) -> list[TocSearchHit]:
+        """Score each chapter using binary heading match + BM25 path/sub scores."""
+        _H_WEIGHT = 10.0
+        _P_WEIGHT = 6.0
+        _S_WEIGHT = 3.0
+
+        p_scores = bm25_path.get_scores(query_tokens)
+        s_scores = bm25_sub.get_scores(query_tokens)
+        qt = set(query_tokens)
 
         hits: list[TocSearchHit] = []
-
-        for i, (heading, path, subs) in enumerate(chapter_texts):
-            searchable = heading + " " + path + " " + subs
-
-            score = 0.0
-            for term in search_terms:
-                w = term_weights[term]
-                # Prefix match to handle plurals/inflections (e.g. fence→fences)
-                pattern = r"\b" + re.escape(term)
-                if re.search(pattern, heading):
-                    score += 10 * w
-                if re.search(pattern, path):
-                    score += 6 * w
-                if re.search(pattern, subs):
-                    score += 3 * w
-
-            # Bonus for matching the full query as a phrase
-            if query in searchable:
-                score += 20
-
+        for i, ch in enumerate(self.chapters):
+            heading_match_count = len(qt & heading_sets[i])
+            score = (
+                _H_WEIGHT * heading_match_count
+                + _P_WEIGHT * float(p_scores[i])
+                + _S_WEIGHT * float(s_scores[i])
+            )
             if score > 0:
-                ch = self.chapters[i]
                 hits.append(
                     TocSearchHit(
                         chapter_index=i,
@@ -230,8 +304,25 @@ def build_corpus_toc(
 ) -> CorpusToc:
     nz_chapters, nz_lines = parse_toc(non_zoning_text, "non_zoning")
     z_chapters, z_lines = parse_toc(zoning_text, "zoning")
+    chapters = nz_chapters + z_chapters
+
+    # Build BM25 indices for path and subheadings (with stop-word filtering)
+    heading_token_sets = [set(_tokenize(ch.heading)) for ch in chapters]
+    path_docs = [_tokenize(" ".join(ch.heading_path)) for ch in chapters]
+    sub_docs = [_tokenize(" ".join(ch.subheadings)) for ch in chapters]
+
+    # Fallback indices (no stop-word filtering) for all-stop-word queries
+    heading_token_sets_full = [set(_tokenize_full(ch.heading)) for ch in chapters]
+    path_docs_full = [_tokenize_full(" ".join(ch.heading_path)) for ch in chapters]
+    sub_docs_full = [_tokenize_full(" ".join(ch.subheadings)) for ch in chapters]
 
     return CorpusToc(
-        chapters=nz_chapters + z_chapters,
+        chapters=chapters,
         _lines_by_corpus={"non_zoning": nz_lines, "zoning": z_lines},
+        _heading_token_sets=heading_token_sets,
+        _bm25_path=BM25Okapi(path_docs),
+        _bm25_sub=BM25Okapi(sub_docs),
+        _heading_token_sets_full=heading_token_sets_full,
+        _bm25_path_full=BM25Okapi(path_docs_full),
+        _bm25_sub_full=BM25Okapi(sub_docs_full),
     )
