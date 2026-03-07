@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Somerville Law Assistant</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <h1>Somerville Law Assistant</h1>
+      <p class="subtitle">Grounded answers over zoning and non-zoning ordinances.</p>
+      <ul class="checklist">
+        <li>Uses explicit section citations (`secid`).</li>
+        <li>Refuses when grounding is insufficient.</li>
+        <li>Supports provider swapping by configuration.</li>
+      </ul>
+      <div id="health" class="health">Loading backend status…</div>
+    </aside>
+
+    <main class="chat-area">
+      <div id="messages" class="messages" aria-live="polite"></div>
+
+      <form id="chat-form" class="composer">
+        <textarea
+          id="prompt"
+          name="prompt"
+          rows="3"
+          placeholder="Ask about Somerville law (zoning + non-zoning)…"
+          required
+        ></textarea>
+        <div class="composer-row">
+          <button id="send" type="submit">Send</button>
+          <span class="hint">Shift+Enter for newline</span>
+        </div>
+      </form>
+    </main>
+  </div>
+
+  <template id="message-template">
+    <article class="message">
+      <header>
+        <span class="role"></span>
+        <span class="meta"></span>
+      </header>
+      <div class="content"></div>
+      <section class="citations"></section>
+    </article>
+  </template>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

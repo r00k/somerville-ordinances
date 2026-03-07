@@ -1,0 +1,12 @@
+.git
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+.idea/
+.vscode/
+
+*.raw.html
+*.readable.html
+*.pdf

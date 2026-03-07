@@ -6,6 +6,8 @@ Consolidated, LLM-ready extracts of Somerville municipal law from enCodePlus.
 
 This repository fetches official municipal-law content from Somerville's enCodePlus publications, normalizes it into machine-friendly Markdown, and optionally renders a human-friendly HTML reading edition.
 
+It now also includes a local web app with a ChatGPT-style interface for grounded legal Q&A over both corpora.
+
 ## Who This Is For
 
 - People building RAG/LLM workflows over Somerville law text.
@@ -25,6 +27,11 @@ This repository fetches official municipal-law content from Somerville's enCodeP
 - `fetch_somerville_law.py`: main multi-part extractor and cleaner.
 - `fetch_somerville_zoning.py`: zoning ordinance extractor with image placeholders + image manifest.
 - `render_markdown_html.py`: standalone styled HTML renderer for the consolidated markdown.
+- `app/`: FastAPI backend + static chat UI for grounded legal Q&A.
+- `main.py`: app runner entrypoint.
+- `requirements.txt`: dependencies for fetch/render + web app.
+- `.env.example`: provider-agnostic runtime configuration template.
+- `scripts/verify_app_answers.py`: end-to-end answer verification for critical questions.
 - `somerville-law-non-zoning.md`: primary consolidated markdown output.
 - `somerville-law-non-zoning.raw.html`: bundled raw source HTML used for auditability.
 - `somerville-law-non-zoning.readable.html`: styled reading edition.
@@ -55,6 +62,106 @@ Expected outputs:
 - `somerville-zoning.raw.html`
 - `somerville-zoning.images.json`
 - `somerville-zoning.readable.html`
+
+## Legal QA Web App (Chat Interface)
+
+The app serves a public-facing chat experience with strict grounding controls:
+
+- loads both corpora (`somerville-law-non-zoning.md` + `somerville-zoning.md`),
+- retrieves secid-aware sections,
+- requires citations tied to retrieved sections,
+- validates citation quotes server-side,
+- refuses/asks clarification if grounding is insufficient.
+
+Run locally:
+
+```bash
+python3 -m pip install -r requirements.txt
+
+# Optional: copy and edit provider/runtime settings
+cp .env.example .env
+
+# Default offline mode uses MODEL_PROVIDER=mock
+python3 main.py
+
+# or
+python3 -m uvicorn app.api:app --host 127.0.0.1 --port 8000 --reload
+```
+
+Open `http://127.0.0.1:8000`.
+
+Container run:
+
+```bash
+docker build -t somerville-law-assistant .
+docker run --rm -p 8000:8000 \
+  -e MODEL_PROVIDER=mock \
+  -e MODEL_NAME=mock-local \
+  somerville-law-assistant
+```
+
+## Model Provider Swapping
+
+The model layer is provider-agnostic. Retrieval + citation validation behavior stays the same while swapping only env config.
+
+Examples:
+
+```bash
+# OpenAI
+MODEL_PROVIDER=openai \
+MODEL_NAME=gpt-5.4 \
+OPENAI_API_KEY=... \
+python3 -m uvicorn app.api:app --host 127.0.0.1 --port 8000
+
+# Anthropic
+MODEL_PROVIDER=anthropic \
+MODEL_NAME=claude-sonnet-4-5 \
+ANTHROPIC_API_KEY=... \
+python3 -m uvicorn app.api:app --host 127.0.0.1 --port 8000
+
+# Generic key override (works for either provider)
+MODEL_PROVIDER=openai MODEL_API_KEY=... python3 main.py
+```
+
+Relevant settings (see `.env.example`):
+
+- `MODEL_PROVIDER` (`mock`, `openai`, `anthropic`)
+- `MODEL_NAME`
+- `MODEL_API_KEY` or provider-specific key (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`)
+- `ENABLE_LONG_CONTEXT_VERIFICATION` (optional second-pass check for broad/low-confidence queries)
+- retrieval tuning options (`RETRIEVAL_TOP_K`, `RETRIEVAL_EXCERPT_CHARS`, etc.)
+
+## App Correctness Guardrails
+
+The chat backend enforces:
+
+- corpus routing across zoning/non-zoning based on query intent,
+- lexical retrieval over secid sections,
+- closed-book answer generation from retrieved text only,
+- strict machine-readable citations (`corpus`, `secid`, `quote`, `reason`),
+- quote-substring validation against source section text,
+- repair attempt on invalid citations,
+- refusal behavior when grounding still fails.
+
+This is designed to reduce the chance of confident but ungrounded legal guidance.
+
+## App Verification Checks
+
+Automated script for critical questions:
+
+```bash
+# Start the app in one terminal
+MODEL_PROVIDER=mock MODEL_NAME=mock-local python3 -m uvicorn app.api:app --host 127.0.0.1 --port 8000
+
+# Run checks in another terminal
+python3 scripts/verify_app_answers.py --base-url http://127.0.0.1:8000
+```
+
+Current checks ask the app:
+
+- how many people sit on city council (expected: `11`),
+- inclusionary-zoning affordable requirement for 2 units (`0`) and 20 units (`4`),
+- whether a 100-year-old building can be demolished without permission (expected: `no`).
 
 ## Zoning Extract (Text + Image Placeholders)
 
