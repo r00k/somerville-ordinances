@@ -156,3 +156,34 @@ def test_chat_pipeline_error_logs_structured_json(
     assert failure_event["response_status"] == 500
     assert failure_event["error"]["type"] == "RuntimeError"
     assert "forced failure" in failure_event["error"]["message"]
+
+
+def test_multi_turn_mayor_follow_ups(client: TestClient) -> None:
+    history: list[dict[str, str]] = []
+
+    # Turn 1: How long is the mayor's term?
+    r1 = client.post("/api/chat", json={"message": "How long is the mayor's term?", "history": history})
+    assert r1.status_code == 200
+    p1 = r1.json()
+    assert p1["confidence"] == "high"
+    assert "2 year" in p1["answer"].lower()
+    history.append({"role": "user", "content": "How long is the mayor's term?"})
+    history.append({"role": "assistant", "content": p1["answer"]})
+
+    # Turn 2: How is he or she elected?
+    r2 = client.post("/api/chat", json={"message": "How is he or she elected?", "history": history})
+    assert r2.status_code == 200
+    p2 = r2.json()
+    assert p2["refused"] is False
+    assert p2["citations"]
+    assert p2["confidence"] != "low", f"Expected non-low confidence, got: {p2['answer']}"
+    history.append({"role": "user", "content": "How is he or she elected?"})
+    history.append({"role": "assistant", "content": p2["answer"]})
+
+    # Turn 3: How can he or she be removed from office?
+    r3 = client.post("/api/chat", json={"message": "How can he or she be removed from office?", "history": history})
+    assert r3.status_code == 200
+    p3 = r3.json()
+    assert p3["refused"] is False
+    assert p3["citations"]
+    assert p3["confidence"] != "low", f"Expected non-low confidence, got: {p3['answer']}"

@@ -90,9 +90,10 @@ class AnswerEngine:
             model=self.settings.model_name,
         )
 
-        routed_corpora = route_query_corpora(question)
+        search_query = self._build_search_query(question, history)
+        routed_corpora = route_query_corpora(search_query)
         hits, trace = self.index.search(
-            question,
+            search_query,
             allowed_corpora=routed_corpora,
             top_k=self.settings.retrieval_top_k,
             excerpt_chars=self.settings.retrieval_excerpt_chars,
@@ -232,6 +233,15 @@ class AnswerEngine:
             used_long_context_verification=used_long_context,
             retrieval_trace=trace,
         )
+
+    @staticmethod
+    def _build_search_query(question: str, history: list[dict[str, str]]) -> str:
+        """Combine the current question with conversation history for retrieval."""
+        if len(history) < 2:
+            return question
+        context_parts = [msg["content"] for msg in history[:-1]]
+        context_parts.append(question)
+        return " ".join(context_parts)
 
     def _generate_validated_answer(
         self,
