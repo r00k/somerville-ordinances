@@ -14,32 +14,6 @@ It now also includes a local web app with a ChatGPT-style interface for grounded
 - Researchers, civic technologists, and policy teams who want consolidated non-zoning and zoning law corpora.
 - Developers who want a reproducible fetch + transform + verification pipeline.
 
-## Default Scope
-
-- `fetch_somerville_law.py` default scope: **Part I Charter**, **Part II Code of Ordinances**, and **Appendices B, D, E** from `somerville-ma-coo`.
-- `fetch_somerville_law.py` exclusions: top-level **Appendix A** (`tocid=001.007`), top-level **Appendix C** (`tocid=001.009`), and Somerville's separate zoning publication.
-- `fetch_somerville_law.py` source root: `https://online.encodeplus.com/regs/somerville-ma-coo/doc-viewer.aspx?tocid=001`.
-- `fetch_somerville_zoning.py` default scope: full zoning ordinance from `somerville-ma` `tocid=001`.
-- `fetch_somerville_zoning.py` source root: `https://online.encodeplus.com/regs/somerville-ma/doc-viewer.aspx#secid--1`.
-
-## Repository Contents
-
-- `fetch_somerville_law.py`: main multi-part extractor and cleaner.
-- `fetch_somerville_zoning.py`: zoning ordinance extractor with image placeholders + image manifest.
-- `render_markdown_html.py`: standalone styled HTML renderer for the consolidated markdown.
-- `app/`: FastAPI backend + static chat UI for grounded legal Q&A.
-- `main.py`: app runner entrypoint.
-- `requirements.txt`: dependencies for fetch/render + web app.
-- `.env.example`: provider-agnostic runtime configuration template.
-- `scripts/verify_app_answers.py`: end-to-end answer verification for critical questions.
-- `scripts/backfill_pgvector.py`: loads sections into Postgres and backfills embeddings.
-- `somerville-law-non-zoning.md`: primary consolidated markdown output.
-- `somerville-law-non-zoning.raw.html`: bundled raw source HTML used for auditability.
-- `somerville-law-non-zoning.readable.html`: styled reading edition.
-- `somerville-zoning.md`: primary zoning markdown output.
-- `somerville-zoning.raw.html`: raw zoning source HTML bundle.
-- `somerville-zoning.images.json`: zoning image/figure placeholder manifest.
-
 ## Quick Start
 
 ```bash
@@ -66,13 +40,22 @@ Expected outputs:
 
 ## Legal QA Web App (Chat Interface)
 
-The app serves a public-facing chat experience with strict grounding controls:
+The app serves a public-facing chat experience with strict grounding controls.
 
-- loads both corpora (`somerville-law-non-zoning.md` + `somerville-zoning.md`),
-- retrieves secid-aware sections with lexical + semantic ranking,
+### Two-Pass Architecture
+
+The QA engine uses a two-pass approach to answer questions:
+
+**Pass 1 — Chapter Selection (cheap model).** At startup, the app parses both markdown corpora into a table of contents listing every chapter and its subheadings. When a question arrives, this TOC is sent to a fast, inexpensive model (`gpt-4.1-mini` by default, configurable via `PASS1_MODEL_NAME`) which selects the 1–3 most relevant chapters by index.
+
+**Pass 2 — Answer Generation (capable model).** The full text of the selected chapters is sent to the primary model (`gpt-5.4` by default, configurable via `MODEL_NAME`) along with the user's question and conversation history. This model generates an answer with citations grounded in the retrieved text.
+
+This split keeps costs low (the TOC selection task is simple enough for a mini model) while preserving answer quality for the generation step.
+
+Additional guardrails:
 - requires citations tied to retrieved sections,
-- validates citation quotes server-side,
-- refuses/asks clarification if grounding is insufficient.
+- refuses or asks clarification if grounding is insufficient,
+- supports multi-turn conversation with history.
 
 Run locally:
 
@@ -101,23 +84,6 @@ docker run --rm -p 8000:8000 \
   somerville-law-assistant
 ```
 
-## Hybrid Retrieval Setup (Postgres + pgvector)
-
-Hybrid retrieval is enabled automatically when `POSTGRES_DSN` is set.
-
-```bash
-# Example env (can also be placed in .env)
-export POSTGRES_DSN='postgresql://user:pass@localhost:5432/somerville'
-export OPENAI_API_KEY='...'
-export EMBEDDING_MODEL='text-embedding-3-small'
-
-# Create/refresh schema + section rows + embeddings
-python3 scripts/backfill_pgvector.py --batch-size 64
-
-# Run the app (hybrid retrieval will be active)
-python3 -m uvicorn app.api:app --host 127.0.0.1 --port 8000 --reload
-```
-
 ## Model Provider Swapping
 
 The model layer is provider-agnostic. Retrieval + citation validation behavior stays the same while swapping only env config.
@@ -143,214 +109,11 @@ MODEL_PROVIDER=openai MODEL_API_KEY=... python3 main.py
 
 Relevant settings (see `.env.example`):
 
-- `MODEL_PROVIDER` (`mock`, `openai`, `anthropic`)
-- `MODEL_NAME`
+- `MODEL_PROVIDER` (`openai`, `anthropic`)
+- `MODEL_NAME` (primary model for answer generation, default `gpt-5.4`)
+- `PASS1_MODEL_NAME` (cheaper model for chapter selection, default `gpt-4.1-mini`)
 - `MODEL_API_KEY` or provider-specific key (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`)
-- `POSTGRES_DSN` (enables hybrid retrieval when set)
-- `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL`, `EMBEDDING_API_KEY`
-- `ENABLE_LONG_CONTEXT_VERIFICATION` (optional second-pass check for broad/low-confidence queries)
-- retrieval tuning options (`RETRIEVAL_TOP_K`, `RETRIEVAL_EXCERPT_CHARS`, etc.)
 - `OBSERVABILITY_LOG_LEVEL` (`DEBUG`, `INFO`, `WARNING`, etc.)
-
-## Structured Observability Logs
-
-The chat backend emits JSON log events for production debugging and traceability. Each event includes a `request_id` so you can correlate a single question across retrieval, model attempts, response generation, and failures.
-
-Key event families:
-
-- `chat.*` for API request intake, validation failures, emitted responses, and 500 errors.
-- `qa.*` for assistance attempts (retrieval results, model requests/responses, citation validation/repair, refusal reasons, and completion).
-
-## App Correctness Guardrails
-
-The chat backend enforces:
-
-- corpus routing across zoning/non-zoning based on query intent,
-- hybrid lexical + semantic retrieval over secid sections,
-- closed-book answer generation from retrieved text only,
-- strict machine-readable citations (`corpus`, `secid`, `quote`, `reason`),
-- quote-substring validation against source section text,
-- repair attempt on invalid citations,
-- refusal behavior when grounding still fails.
-
-This is designed to reduce the chance of confident but ungrounded legal guidance.
-
-## App Verification Checks
-
-Automated script for critical and extended sanity checks:
-
-```bash
-# Start the app in one terminal (mock mode for offline smoke testing)
-MODEL_PROVIDER=mock MODEL_NAME=mock-local python3 -m uvicorn app.api:app --host 127.0.0.1 --port 8000
-
-# Run acceptance-critical checks (default suite is critical)
-python3 scripts/verify_app_answers.py --base-url http://127.0.0.1:8000 --suite critical
-
-# Run extended sanity checks with a real model provider (OpenAI/Anthropic)
-MODEL_PROVIDER=anthropic MODEL_NAME=claude-opus-4-6 ANTHROPIC_API_KEY=... \
-python3 -m uvicorn app.api:app --host 127.0.0.1 --port 8000
-
-# Then run all checks (critical + sanity)
-python3 scripts/verify_app_answers.py --base-url http://127.0.0.1:8000 --suite all
-
-# Or run only the 10-question sanity suite
-python3 scripts/verify_app_answers.py --base-url http://127.0.0.1:8000 --suite sanity
-```
-
-Notes:
-
-- By default, each question runs independently (no cross-question chat history).
-- Add `--carry-history` to test multi-turn behavior.
-- Non-refused answers must include at least one citation to pass.
-- The `sanity` and `all` suites are intended for real-provider end-to-end validation, not mock-only runs.
-
-Critical checks verify:
-
-- city council size (`11`),
-- inclusionary-zoning 2-unit (`0`) and 20-unit (`4`) affordability requirement,
-- demolition without permission (`no`).
-
-Sanity suite (10 additional doc-grounded checks) verifies expected answers for:
-
-- mayor term of office (`2 years`),
-- ward councilor count (`7`),
-- votes required to override mayoral veto (`8`),
-- special city council meeting notice timing (`3 business days`),
-- group petition signature threshold (`50 voters`),
-- zoning text vs. graphics precedence (text controls),
-- demolition definition threshold (`50%` exterior walls and roof),
-- Neighborhood Residence address-sign max height (`12 inches`),
-- parking unbundling requirement (parking must be unbundled),
-- default classification for unmapped land (Civic District).
-
-## Zoning Extract (Text + Image Placeholders)
-
-`fetch_somerville_zoning.py` targets Somerville's separate zoning publication at:
-
-`https://online.encodeplus.com/regs/somerville-ma/doc-viewer.aspx#secid--1`
-
-Default behavior:
-
-- Fetches `doc-view.aspx?tocid=001` (full zoning ordinance).
-- Preserves one `<!-- secid:... -->` marker per extracted section.
-- Emits inline placeholders for images and embedded media (instead of dropping them).
-- Writes a machine-readable image manifest JSON with section IDs and source URLs.
-
-Useful options:
-
-- `--skip-pdf-attempt` skip host PDF export (faster, fewer network calls).
-- `--strip-metadata` remove publication metadata lines such as `Effective on: ...`.
-- `--markdown-output`, `--html-output`, `--images-output`, `--pdf-output` for custom paths.
-
-## How It Works
-
-```text
-Non-zoning pipeline:
-enCodePlus (somerville-ma-coo) doc-view.aspx (selected tocid roots)
-  -> fetch_somerville_law.py
-  -> HTML parsing + markdown rendering + metadata cleanup
-  -> somerville-law-non-zoning.md + somerville-law-non-zoning.raw.html
-  -> render_markdown_html.py (optional)
-  -> somerville-law-non-zoning.readable.html
-
-Zoning pipeline:
-enCodePlus (somerville-ma) doc-view.aspx?tocid=001
-  -> fetch_somerville_zoning.py
-  -> HTML parsing + markdown rendering + image placeholders + image manifest
-  -> somerville-zoning.md + somerville-zoning.raw.html + somerville-zoning.images.json
-  -> render_markdown_html.py (optional)
-  -> somerville-zoning.readable.html
-```
-
-## Configuration
-
-`fetch_somerville_law.py` options:
-
-- `--tocids <csv>` comma-separated tocid roots in desired order.
-- `--markdown-output <path>` output markdown path.
-- `--html-output <path>` output raw HTML bundle path.
-- `--pdf-output <path>` output path for optional host-exported PDF.
-- `--pdf-tocid <tocid>` tocid used for optional host PDF export.
-- `--skip-pdf-attempt` skip PDF export attempts.
-
-Default `--tocids` value:
-
-`001.003,001.004,001.008,001.012,001.013`
-
-`fetch_somerville_zoning.py` options:
-
-- `--tocid <tocid>` root tocid to extract (default: `001`).
-- `--markdown-output <path>` output markdown path.
-- `--html-output <path>` output raw HTML path.
-- `--images-output <path>` output image manifest JSON path.
-- `--pdf-output <path>` output path for optional host-exported PDF.
-- `--skip-pdf-attempt` skip PDF export attempts.
-- `--strip-metadata` remove publication metadata lines (off by default).
-
-## Customization Examples
-
-```bash
-# Only Part I + Part II
-python3 fetch_somerville_law.py --tocids 001.003,001.004
-
-# Add output paths explicitly
-python3 fetch_somerville_law.py \
-  --markdown-output out/somerville.md \
-  --html-output out/somerville.raw.html
-
-# Skip PDF export attempt (faster, fewer network calls)
-python3 fetch_somerville_law.py --skip-pdf-attempt
-
-# Zoning extract with cleaner text for LLMs
-python3 fetch_somerville_zoning.py --skip-pdf-attempt --strip-metadata
-```
-
-## Verification And Traceability
-
-- The markdown includes one `<!-- secid:... -->` marker per extracted section.
-- The raw HTML bundle preserves fetched source pages for audit and diff checks.
-- A strict completeness check compares `data-secid` values in raw HTML to markdown markers.
-
-```bash
-python3 - <<'PY'
-import re
-from pathlib import Path
-raw = Path('somerville-law-non-zoning.raw.html').read_text(encoding='utf-8')
-md = Path('somerville-law-non-zoning.md').read_text(encoding='utf-8')
-raw_ids = re.findall(r"data-secid=['\"](\d+)['\"]", raw)
-md_ids = re.findall(r"<!--\s*secid:(\d+)\s*-->", md)
-print('raw_total=', len(raw_ids), 'md_total=', len(md_ids), 'sequence_exact=', raw_ids == md_ids)
-PY
-```
-
-```bash
-python3 - <<'PY'
-import json
-import re
-from pathlib import Path
-
-raw = Path('somerville-zoning.raw.html').read_text(encoding='utf-8')
-md = Path('somerville-zoning.md').read_text(encoding='utf-8')
-images = json.loads(Path('somerville-zoning.images.json').read_text(encoding='utf-8'))
-
-raw_ids = re.findall(r"data-secid=['\"](\d+)['\"]", raw)
-md_ids = re.findall(r"<!--\s*secid:(\d+)\s*-->", md)
-placeholders = re.findall(r"\[(?:Image|Embedded media)\s+\d+", md)
-
-print('zoning_raw_total=', len(raw_ids), 'zoning_md_total=', len(md_ids), 'sequence_exact=', raw_ids == md_ids)
-print('zoning_placeholder_total=', len(placeholders), 'zoning_manifest_total=', len(images), 'counts_match=', len(placeholders) == len(images))
-PY
-```
-
-## Content Cleanup Rules
-
-`fetch_somerville_law.py` removes non-substantive publication metadata lines during markdown assembly, including:
-
-- standalone ordinance-history parentheticals such as `(Ord. No. ...)`, `(Acts ####, ...)`, `(Code ####, ...)`, and related pending-repeal text,
-- `Effective on: ...` lines,
-- `Editor's note` and `Editor's note(s)` prefixed metadata lines.
-
-This keeps regenerated outputs consistent and easier for downstream NLP/LLM use.
 
 ## Known Limitations
 
