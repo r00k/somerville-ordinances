@@ -35,7 +35,6 @@ class ModelAnswerPayload(BaseModel):
     answer_markdown: str
     citations: list[CitationPayload] = Field(default_factory=list)
     confidence: Literal["low", "medium", "high"] = "low"
-    insufficient_context: bool = False
     clarification_question: Optional[str] = None
 
 
@@ -202,20 +201,6 @@ class AnswerEngine:
             hits=hits,
         )
 
-        if candidate.insufficient_context or not candidate.citations:
-            return self._refusal_result(
-                trace=trace,
-                clarification_question=(
-                    candidate.clarification_question
-                    or "I can only answer when I can cite exact ordinance text. Can you narrow the scope?"
-                ),
-                confidence=final_confidence,
-                used_long_context=used_long_context,
-                request_id=request_id,
-                question=question,
-                refusal_reason="insufficient_grounding",
-            )
-
         citation_views = self._to_citation_views(candidate.citations, hits)
         answer = candidate.answer_markdown.strip()
 
@@ -267,9 +252,8 @@ class AnswerEngine:
             validation_error_count=len(errors),
             validation_errors=errors,
             valid_citation_count=len(valid_citations),
-            insufficient_context=answer.insufficient_context,
         )
-        if errors and not answer.insufficient_context:
+        if errors:
             log_event(
                 "qa.citation_repair_requested",
                 level="warning",
@@ -298,10 +282,9 @@ class AnswerEngine:
                 validation_error_count=len(errors),
                 validation_errors=errors,
                 valid_citation_count=len(valid_citations),
-                insufficient_context=answer.insufficient_context,
             )
 
-        if errors and not answer.insufficient_context:
+        if errors:
             log_event(
                 "qa.citation_validation_failed",
                 level="warning",
@@ -313,7 +296,6 @@ class AnswerEngine:
                 answer_markdown="I cannot provide a grounded answer from the retrieved legal text.",
                 citations=[],
                 confidence="low",
-                insufficient_context=True,
                 clarification_question="Could you narrow the question or reference a specific ordinance topic?",
             )
 
@@ -321,7 +303,6 @@ class AnswerEngine:
             answer_markdown=answer.answer_markdown,
             citations=valid_citations,
             confidence=answer.confidence,
-            insufficient_context=answer.insufficient_context,
             clarification_question=answer.clarification_question,
         )
 
@@ -336,10 +317,11 @@ class AnswerEngine:
             "You are a QA assistant for Somerville municipal law. "
             "Use ONLY the retrieved ordinance sections. "
             "Answer as fully as you can from the available sections, even if they don't cover every aspect of the topic. "
-            "Only set insufficient_context=true if the retrieved sections contain nothing relevant at all. "
+            "ALWAYS provide an answer using whatever relevant sections are available. "
             "Do not invent section IDs, percentages, or permissions. "
             "Each citation quote MUST be copied exactly from the section text (exact substring match). "
             "Do NOT include any disclaimers, legal warnings, or 'informational only' notices in your answer. "
+            "Use bold sparingly — only for the single most important fact in your answer, if any. Prefer plain text. "
             "Return strictly valid JSON matching the requested schema."
         )
 
@@ -402,8 +384,8 @@ class AnswerEngine:
     ) -> ModelAnswerPayload:
         system_prompt = (
             "You are repairing citation grounding errors in a legal QA response. "
-            "Fix citation corpus/secid/quote so every quote is an exact substring of provided sections, "
-            "or set insufficient_context=true. Return JSON only."
+            "Fix citation corpus/secid/quote so every quote is an exact substring of provided sections. "
+            "Return JSON only."
         )
 
         prior_json = prior_payload.model_dump_json()
@@ -415,7 +397,7 @@ class AnswerEngine:
             "Validation errors:\n"
             f"{issues}\n\n"
             "Use the same schema:\n"
-            "{\"answer_markdown\": string, \"citations\": [{\"corpus\": \"non_zoning|zoning\", \"secid\": string, \"quote\": string, \"reason\": string}], \"confidence\": \"low|medium|high\", \"insufficient_context\": boolean, \"clarification_question\": string|null}\n\n"
+            "{\"answer_markdown\": string, \"citations\": [{\"corpus\": \"non_zoning|zoning\", \"secid\": string, \"quote\": string, \"reason\": string}], \"confidence\": \"low|medium|high\", \"clarification_question\": string|null}\n\n"
             "Retrieved sections:\n"
             f"{render_section_context(hits)}"
         )
@@ -507,11 +489,6 @@ class AnswerEngine:
 
     @staticmethod
     def _choose_candidate(current: GeneratedAnswer, alternative: GeneratedAnswer) -> GeneratedAnswer:
-        if current.insufficient_context and not alternative.insufficient_context:
-            return alternative
-        if alternative.insufficient_context and not current.insufficient_context:
-            return current
-
         current_rank = confidence_rank(current.confidence)
         alt_rank = confidence_rank(alternative.confidence)
         if alt_rank > current_rank:
@@ -585,13 +562,13 @@ def build_answer_user_prompt(
 
     return (
         "Return JSON with this schema exactly:\n"
-        "{\"answer_markdown\": string, \"citations\": [{\"corpus\": \"non_zoning|zoning\", \"secid\": string, \"quote\": string, \"reason\": string}], \"confidence\": \"low|medium|high\", \"insufficient_context\": boolean, \"clarification_question\": string|null}\n\n"
+        "{\"answer_markdown\": string, \"citations\": [{\"corpus\": \"non_zoning|zoning\", \"secid\": string, \"quote\": string, \"reason\": string}], \"confidence\": \"low|medium|high\", \"clarification_question\": string|null}\n\n"
         "Rules:\n"
         "1) Only answer using retrieved sections below.\n"
         "2) Every material claim must be supported by at least one citation.\n"
         "3) citation.quote must be an exact excerpt from that section text.\n"
-        "4) If uncertain or incomplete, set insufficient_context=true.\n"
-        "5) Keep answer concise and include numbers/conditions directly when present.\n\n"
+        "4) Keep answer concise and include numbers/conditions directly when present.\n"
+        "\n"
         "Conversation history:\n"
         f"{history_block}\n\n"
         "Question:\n"
@@ -659,7 +636,6 @@ def payload_to_generated(payload: ModelAnswerPayload) -> GeneratedAnswer:
         answer_markdown=payload.answer_markdown.strip(),
         citations=citations,
         confidence=payload.confidence,
-        insufficient_context=payload.insufficient_context,
         clarification_question=payload.clarification_question,
     )
 

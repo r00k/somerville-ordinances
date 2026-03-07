@@ -43,7 +43,7 @@ def load_settings() -> AppSettings:
     if load_dotenv is not None:
         load_dotenv(APP_ROOT / ".env", override=False)
 
-    model_provider = os.getenv("MODEL_PROVIDER", "mock").strip().lower()
+    model_provider = os.getenv("MODEL_PROVIDER", "openai").strip().lower()
     model_name = os.getenv("MODEL_NAME", "gpt-5.4")
 
     generic_key = os.getenv("MODEL_API_KEY")

@@ -43,5 +43,4 @@ class GeneratedAnswer:
     answer_markdown: str
     citations: list[CitationRecord]
     confidence: Confidence
-    insufficient_context: bool
     clarification_question: str | None
