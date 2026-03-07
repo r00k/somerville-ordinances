@@ -14,9 +14,9 @@ from pydantic import BaseModel, Field
 from .config import AppSettings, load_settings
 from .corpus import CorpusBundle, load_corpus_sections
 from .observability import configure_observability, log_event, serialize_exception
-from .provider import ModelProvider, build_provider
+from .provider import CorpusModel, OpenAICorpusModel
 from .qa import AnswerEngine
-from .retrieval import SectionIndex
+from .types import CorpusName
 
 
 class ChatMessage(BaseModel):
@@ -36,7 +36,6 @@ class CitationResponse(BaseModel):
     source_file: str
     quote: str
     reason: str
-    score: float
 
 
 class ChatResponse(BaseModel):
@@ -46,26 +45,51 @@ class ChatResponse(BaseModel):
     refused: bool
     needs_clarification: bool
     clarification_question: Optional[str]
-    used_long_context_verification: bool
-    requested_corpora: list[str]
+    routed_corpus: Optional[Literal["non_zoning", "zoning"]]
 
 
 @dataclass(frozen=True)
 class AppRuntime:
     settings: AppSettings
     corpus_bundle: CorpusBundle
-    index: SectionIndex
-    provider: ModelProvider
+    models: dict[CorpusName, CorpusModel]
     engine: AnswerEngine
 
 
-def build_runtime(settings: AppSettings | None = None) -> AppRuntime:
+def build_runtime(
+    settings: AppSettings | None = None,
+    models: dict[CorpusName, CorpusModel] | None = None,
+) -> AppRuntime:
     settings = settings or load_settings()
     bundle = load_corpus_sections(settings.non_zoning_markdown, settings.zoning_markdown)
-    index = SectionIndex(bundle.sections)
-    provider = build_provider(settings)
-    engine = AnswerEngine(settings=settings, corpus_bundle=bundle, index=index, provider=provider)
-    return AppRuntime(settings=settings, corpus_bundle=bundle, index=index, provider=provider, engine=engine)
+    active_models = models or build_corpus_models(settings, bundle)
+    engine = AnswerEngine(settings=settings, corpus_bundle=bundle, models=active_models)
+    return AppRuntime(settings=settings, corpus_bundle=bundle, models=active_models, engine=engine)
+
+
+def build_corpus_models(settings: AppSettings, bundle: CorpusBundle) -> dict[CorpusName, CorpusModel]:
+    non_zoning_sections = [section for section in bundle.sections if section.corpus == "non_zoning"]
+    zoning_sections = [section for section in bundle.sections if section.corpus == "zoning"]
+
+    if not non_zoning_sections or not zoning_sections:
+        raise RuntimeError("Both non-zoning and zoning corpora must contain sections.")
+
+    return {
+        "non_zoning": OpenAICorpusModel(
+            corpus="non_zoning",
+            model_name=settings.model_name,
+            api_key=settings.openai_api_key,
+            timeout_seconds=settings.request_timeout_seconds,
+            sections=non_zoning_sections,
+        ),
+        "zoning": OpenAICorpusModel(
+            corpus="zoning",
+            model_name=settings.model_name,
+            api_key=settings.openai_api_key,
+            timeout_seconds=settings.request_timeout_seconds,
+            sections=zoning_sections,
+        ),
+    }
 
 
 @lru_cache(maxsize=1)
@@ -75,11 +99,17 @@ def get_runtime() -> AppRuntime:
 
 def create_app(runtime: AppRuntime | None = None) -> FastAPI:
     app = FastAPI(title="Somerville Law Assistant", version="0.1.0")
-    active_runtime = runtime or get_runtime()
-    configure_observability(active_runtime.settings.observability_log_level)
+    active_runtime = runtime
 
     static_dir = Path(__file__).resolve().parent / "static"
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+    def runtime_ref() -> AppRuntime:
+        nonlocal active_runtime
+        if active_runtime is None:
+            active_runtime = get_runtime()
+        configure_observability(active_runtime.settings.observability_log_level)
+        return active_runtime
 
     @app.get("/")
     async def read_root() -> FileResponse:
@@ -87,17 +117,19 @@ def create_app(runtime: AppRuntime | None = None) -> FastAPI:
 
     @app.get("/health")
     async def health() -> dict[str, object]:
+        runtime_obj = runtime_ref()
         return {
             "status": "ok",
-            "provider": active_runtime.provider.name,
-            "model": active_runtime.settings.model_name,
-            "sections_loaded": len(active_runtime.corpus_bundle.sections),
-            "retrieval_top_k": active_runtime.settings.retrieval_top_k,
-            "long_context_verification": active_runtime.settings.enable_long_context_verification,
+            "model": runtime_obj.settings.model_name,
+            "non_zoning_sections": sum(1 for section in runtime_obj.corpus_bundle.sections if section.corpus == "non_zoning"),
+            "zoning_sections": sum(1 for section in runtime_obj.corpus_bundle.sections if section.corpus == "zoning"),
+            "non_zoning_context_chars": getattr(runtime_obj.models["non_zoning"], "corpus_context_chars", 0),
+            "zoning_context_chars": getattr(runtime_obj.models["zoning"], "corpus_context_chars", 0),
         }
 
     @app.post("/api/chat", response_model=ChatResponse)
     async def chat(req: ChatRequest) -> ChatResponse:
+        runtime_obj = runtime_ref()
         request_id = str(uuid4())
         message = req.message.strip()
         if not message:
@@ -111,7 +143,7 @@ def create_app(runtime: AppRuntime | None = None) -> FastAPI:
             )
             raise HTTPException(status_code=400, detail="Message cannot be empty.")
 
-        max_history = active_runtime.settings.max_history_messages
+        max_history = runtime_obj.settings.max_history_messages
         history_items = req.history[-max_history:] if max_history else []
         history = [{"role": item.role, "content": item.content.strip()} for item in history_items]
 
@@ -121,12 +153,11 @@ def create_app(runtime: AppRuntime | None = None) -> FastAPI:
             question=message,
             history=history,
             history_count=len(history),
-            provider=active_runtime.provider.name,
-            model=active_runtime.settings.model_name,
+            model=runtime_obj.settings.model_name,
         )
 
         try:
-            result = active_runtime.engine.ask(question=message, history=history, request_id=request_id)
+            result = runtime_obj.engine.ask(question=message, history=history, request_id=request_id)
         except Exception as exc:  # pragma: no cover - surfaced in API response for manual testing
             log_event(
                 "chat.request_failed",
@@ -148,7 +179,6 @@ def create_app(runtime: AppRuntime | None = None) -> FastAPI:
                 source_file=item.source_file,
                 quote=item.quote,
                 reason=item.reason,
-                score=item.score,
             )
             for item in result.citations
         ]
@@ -160,8 +190,7 @@ def create_app(runtime: AppRuntime | None = None) -> FastAPI:
             refused=result.refused,
             needs_clarification=result.needs_clarification,
             clarification_question=result.clarification_question,
-            used_long_context_verification=result.used_long_context_verification,
-            requested_corpora=sorted(result.retrieval_trace.requested_corpora),
+            routed_corpus=result.routed_corpus,
         )
 
         log_event(

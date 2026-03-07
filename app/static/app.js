@@ -87,7 +87,7 @@ function appendMessage({ role, content, meta = "", citations = [] }) {
 
       const label = document.createElement("div");
       label.className = "citation-label";
-      label.textContent = "Citation";
+      label.textContent = `Citation - ${citation.corpus}:${citation.secid}`;
 
       const title = document.createElement("div");
       title.className = "citation-heading";
@@ -107,13 +107,17 @@ function appendMessage({ role, content, meta = "", citations = [] }) {
 }
 
 async function loadHealth() {
+  if (!healthEl) {
+    return;
+  }
+
   try {
     const response = await fetch("/health");
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
     const data = await response.json();
-    healthEl.textContent = `Provider: ${data.provider} · Model: ${data.model} · Sections: ${data.sections_loaded.toLocaleString()}`;
+    healthEl.textContent = `Model: ${data.model} | Non-zoning: ${data.non_zoning_sections.toLocaleString()} | Zoning: ${data.zoning_sections.toLocaleString()}`;
   } catch (err) {
     healthEl.textContent = "Backend health check failed. Confirm the server is running.";
   }
@@ -156,7 +160,9 @@ async function sendMessage(message) {
     }
 
     const data = await response.json();
-    const meta = `Confidence: ${data.refused ? "needs clarification" : data.confidence}${data.used_long_context_verification ? " · long-context check" : ""}`;
+    const meta = data.refused
+      ? "Needs clarification"
+      : `Corpus: ${data.routed_corpus} | Confidence: ${data.confidence}`;
 
     appendMessage({
       role: "assistant",
@@ -169,7 +175,7 @@ async function sendMessage(message) {
     appendMessage({
       role: "assistant",
       content:
-        "The server failed to complete this request. Check API credentials/provider settings and try again.",
+        "The server failed to complete this request. Confirm OPENAI_API_KEY is set and retry.",
       meta: "error",
     });
   } finally {
@@ -199,7 +205,7 @@ promptEl.addEventListener("keydown", (event) => {
 appendMessage({
   role: "assistant",
   content:
-    "Ask me anything about Somerville ordinances. I'll answer based on cited sections.",
+    "Ask about Somerville zoning or non-zoning ordinances. I route each question to one corpus and answer with citations.",
   meta: "ready",
 });
 

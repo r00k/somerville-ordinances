@@ -22,14 +22,6 @@ class CorpusSection:
     def key(self) -> tuple[CorpusName, str]:
         return self.corpus, self.secid
 
-
-@dataclass(frozen=True)
-class RetrievedSection:
-    section: CorpusSection
-    score: float
-    excerpt: str
-
-
 @dataclass(frozen=True)
 class CitationRecord:
     corpus: CorpusName

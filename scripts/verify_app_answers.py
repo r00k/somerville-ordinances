@@ -24,6 +24,7 @@ class CheckCase:
     name: str
     prompt: str
     expected_patterns: tuple[re.Pattern[str], ...]
+    expected_corpus: Literal["non_zoning", "zoning"] | None = None
     forbidden_patterns: tuple[re.Pattern[str], ...] = ()
     min_citations: int = 1
 
@@ -35,6 +36,7 @@ CRITICAL_CASES: tuple[CheckCase, ...] = (
         expected_patterns=(
             ci(r"\b(?:11|eleven)\b"),
         ),
+        expected_corpus="non_zoning",
     ),
     CheckCase(
         name="inclusionary-2-vs-20-units",
@@ -46,6 +48,7 @@ CRITICAL_CASES: tuple[CheckCase, ...] = (
             ci(r"\b2(?:\s*|-)?units?\b.{0,220}\b0\b|\b0\b.{0,220}\b2(?:\s*|-)?units?\b"),
             ci(r"\b20(?:\s*|-)?units?\b.{0,260}\b4\b|\b4\b.{0,260}\b20(?:\s*|-)?units?\b"),
         ),
+        expected_corpus="zoning",
     ),
     CheckCase(
         name="demolition-no-without-permission",
@@ -56,6 +59,7 @@ CRITICAL_CASES: tuple[CheckCase, ...] = (
         forbidden_patterns=(
             ci(r"\byes\b"),
         ),
+        expected_corpus="zoning",
     ),
 )
 
@@ -68,6 +72,7 @@ SANITY_CASES: tuple[CheckCase, ...] = (
             ci(r"\b(?:2|two)\s+years?\b"),
             ci(r"\bmayor\b"),
         ),
+        expected_corpus="non_zoning",
     ),
     CheckCase(
         name="ward-councilor-count",
@@ -75,6 +80,7 @@ SANITY_CASES: tuple[CheckCase, ...] = (
         expected_patterns=(
             ci(r"(?:\b(?:7|seven)\b.*?\bward\s+council(?:or|ors)\b|\bward\s+council(?:or|ors)\b.*?\b(?:7|seven)\b)"),
         ),
+        expected_corpus="non_zoning",
     ),
     CheckCase(
         name="veto-override-votes",
@@ -83,6 +89,7 @@ SANITY_CASES: tuple[CheckCase, ...] = (
             ci(r"\b(?:8|eight)\b.*?\bmembers?\b"),
             ci(r"\boverride\b|\bveto\b"),
         ),
+        expected_corpus="non_zoning",
     ),
     CheckCase(
         name="special-meeting-notice-days",
@@ -93,6 +100,7 @@ SANITY_CASES: tuple[CheckCase, ...] = (
         expected_patterns=(
             ci(r"\b(?:3|three)\s+business\s+days?\b"),
         ),
+        expected_corpus="non_zoning",
     ),
     CheckCase(
         name="group-petition-threshold",
@@ -103,6 +111,7 @@ SANITY_CASES: tuple[CheckCase, ...] = (
         expected_patterns=(
             ci(r"\b(?:50|fifty)\s+voters?\b"),
         ),
+        expected_corpus="non_zoning",
     ),
     CheckCase(
         name="zoning-text-vs-graphics",
@@ -110,6 +119,7 @@ SANITY_CASES: tuple[CheckCase, ...] = (
         expected_patterns=(
             ci(r"\btext\b.*?\b(?:controls?|governs?)\b"),
         ),
+        expected_corpus="zoning",
     ),
     CheckCase(
         name="demolition-definition-threshold",
@@ -118,6 +128,7 @@ SANITY_CASES: tuple[CheckCase, ...] = (
             ci(r"\b(?:50|fifty)\s*(?:%|percent)\b"),
             ci(r"\bwalls?\b.*?\broof\b|\broof\b.*?\bwalls?\b"),
         ),
+        expected_corpus="zoning",
     ),
     CheckCase(
         name="nr-address-sign-height",
@@ -125,6 +136,7 @@ SANITY_CASES: tuple[CheckCase, ...] = (
         expected_patterns=(
             ci(r"\b(?:12|twelve)(?:\s*\(\s*12\s*\))?\s*(?:inch|inches)\b|\b(?:12|twelve)\s*(?:inch|inches)\b"),
         ),
+        expected_corpus="zoning",
     ),
     CheckCase(
         name="unbundled-parking",
@@ -135,6 +147,7 @@ SANITY_CASES: tuple[CheckCase, ...] = (
         forbidden_patterns=(
             ci(r"\b(?:not\s+required|no)\b.*?\bunbundled\b"),
         ),
+        expected_corpus="zoning",
     ),
     CheckCase(
         name="unmapped-land-default-district",
@@ -142,6 +155,7 @@ SANITY_CASES: tuple[CheckCase, ...] = (
         expected_patterns=(
             ci(r"\bcivic\s+district\b"),
         ),
+        expected_corpus="zoning",
     ),
 )
 
@@ -211,11 +225,19 @@ def main() -> int:
 
         citations = payload.get("citations")
         citation_count = len(citations) if isinstance(citations, list) else 0
+        routed_corpus = payload.get("routed_corpus")
 
         if payload.get("refused"):
             failures += 1
             print(f"[fail] Case {idx} ({case.name}): app refused to answer.")
             print(f"       Prompt: {case.prompt}")
+            continue
+
+        if case.expected_corpus and routed_corpus != case.expected_corpus:
+            failures += 1
+            print(f"[fail] Case {idx} ({case.name})")
+            print(f"       Prompt: {case.prompt}")
+            print(f"       Expected routed_corpus={case.expected_corpus}, got {routed_corpus}")
             continue
 
         if citation_count < case.min_citations:
@@ -225,6 +247,17 @@ def main() -> int:
             print(f"       Expected at least {case.min_citations} citation(s), got {citation_count}")
             print(f"       Answer: {answer}\n")
             continue
+
+        if isinstance(citations, list) and routed_corpus:
+            bad_corpus_citations = [
+                citation for citation in citations if isinstance(citation, dict) and citation.get("corpus") != routed_corpus
+            ]
+            if bad_corpus_citations:
+                failures += 1
+                print(f"[fail] Case {idx} ({case.name})")
+                print(f"       Prompt: {case.prompt}")
+                print(f"       Citation corpus mismatch with routed corpus {routed_corpus}")
+                continue
 
         if missing or forbidden:
             failures += 1
@@ -237,7 +270,7 @@ def main() -> int:
             print(f"       Answer: {answer}\n")
             continue
 
-        print(f"[ok] Case {idx} ({case.name}) passed · citations={citation_count}")
+        print(f"[ok] Case {idx} ({case.name}) passed - citations={citation_count}")
 
     if failures:
         print(f"[error] Verification failed: {failures} case(s)")
